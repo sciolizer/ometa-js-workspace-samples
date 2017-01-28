@@ -1,0 +1,28 @@
+/* jshint -W043 */
+var source = '*\
+   * Constricts a normally fixed-size embeddable object to fill the available\
+   * width when space is short.\
+   * Defaults to applying this to images, videos, iframes and anything you tag\
+   * with ".embed".\
+   *\
+  * *Warning* This is applied by default to the following tags:\
+   *  - `img`,\
+   *  - `audio`,\
+   *  - `video`,\
+   *  - `iframe`,\
+   *\
+   * @title .embed\
+   * @examples\
+   * Shrinks a fixed width image to fill the available width\
+   * <div style="width: 32px">\
+   *   <img class="embed" src="http://gravatar.com/avatar/4cf4bc1b3618d2f73a2a290984a1129f?size=64">\
+   * </div>\
+   ';
+/* jshint +W043 */
+
+ometa JavaDocLines {
+  line = "*" :line '\n'  -> line.toString(),
+  block = line* -> line.join('\n')
+}
+
+JavaDocLines.matchAll(source, 'block');
