@@ -1,0 +1,24 @@
+eval(readFile('Compiled_JavaScript_Compiler'))
+
+/*
+   Support having the unary inversion operator ("!") immediately before
+   the member name in a member access expression.
+
+      x.y.!isEmpty()  -->  !x.y.isEmpty()
+*/
+
+ometa BangJSParser <: JSParser {
+   primExpr = primExpr:p
+                 ( "." "!" "name":m "(" listOf(#expr, ','):as ")" -> [`unop, "!", [`send, m, p].concat(as)]
+                 | "." "!" "name":f                               -> [`unop, "!", [`getp, [`string, f], p]]
+                 )
+              | super("primExpr")
+}
+
+i = "getManager('asdf').employees.!isEmpty()"
+a = BangJSParser.matchAll(i, "topLevel")
+b = JSTranslator.match(a, "trans")
+
+// a == [begin, [unop, !, [send, isEmpty, [getp, [string, employees], [call, [get, getManager], [string, asdf]]]]]]
+// b == (!getManager("asdf")["employees"].isEmpty())
+ undefined undefined undefined
