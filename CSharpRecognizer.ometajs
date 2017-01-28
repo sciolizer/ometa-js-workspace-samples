@@ -1,0 +1,43 @@
+// Jeff Moser playing around with Dan Muller's CSharpishGrammar 
+// to get a bare minimum to allow for host expressions in bootstrapping grammar
+
+// Section references point to C# 3.0 specification
+ometa CSharpRecognizer <: Parser {
+  parenExpr = everythingInside('(', ')'),
+  block = everythingInside('{', '}'),
+
+  everythingInside :x :y = token(x) (~seq(y) (ignoredChunk | everythingMetaInside(x,y)))*:xs seq(y)     -> xs.join(''),
+  everythingMetaInside :x :y = everythingInside(x,y):xs  -> [x, xs, y].join('')
+                             | :xs -> [xs].join(''),
+
+  ignoredChunk  = regularString
+                | verbatimString
+                | literalChar
+                | comment,
+   
+  eChar = '\\' char:c -> ['\\', c].join('')
+        | char:c -> c,
+
+  // 2.4.4.4 "Character Literals"
+  literalChar = '\'' eChar:x '\'' -> ['\'', x, '\''].join(''),
+
+  // 2.4.4.5 "String Literals"
+  regularString = '\"' (~'\"' eChar)*:xs '\"' -> ['\"', xs.join(''), '\"'].join(''),
+  verbatimString = '@' '\"' (~'\"' char)*:xs '\"' ->  ['@\"', xs.join(''), '\"'].join(''),
+
+  // 2.3.2 "Comments"
+  comment = fromTo('//', '\n') | fromTo('/*', '*/'),
+  fromTo :x :y   = seq(x):a (~seq(y) char)*:bs seq(y):c -> [a, bs.join(''), c].join('')
+}
+
+isCSharpish = function() {
+  var r = CSharpRecognizer.matchAll(arguments[0], arguments[1]);
+  if (r != arguments[0])
+    throw "Got this: " + r;
+}
+
+//isCSharpish("{{3+4}{5+6}}", "block")
+
+//isCSharpish("{(1+2){3+4}(5+6)}", "block")
+
+isCSharpish("   {  \"a (2+2) with a \\\" string\" ; var x=2.ToString();  public static class MyClass { private string myString = \"Hello World!\"; private void MyFunction() { /* some comment { */ var c = 0;  for(int ix = 0; ix < 4; ix++) { c+= ix; } } } } outside block", "block")
