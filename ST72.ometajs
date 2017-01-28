@@ -1,0 +1,40 @@
+// Not entirely unlike ST-72...
+
+realObjects = {}
+realObjectFor = function(x) {
+  if (x instanceof Object)
+    return x
+  else {
+    if (realObjects[x] == undefined)
+      realObjects[x] = new Object(x)
+    return realObjects[x]
+  }
+}
+
+Boolean.prototype.st72Behavior = function() { return "Boolean" }
+Number.prototype.st72Behavior = function() { return "Number" }
+String.prototype.st72Behavior = function() { return "String" }
+
+ometa ST72 {
+  exactly :x = :y ?(x == y) -> x,
+  realObject = :x -> realObjectFor(x),
+  step       = realObject:recv apply(recv.st72Behavior(), recv),
+  eval       = step* anything,
+             
+  answer     = empty,
+
+  Number :Self  = '+' eval:x answer(Self + x)
+                | '-' eval:x answer(Self - x)
+                | '*' eval:x answer(Self * x)
+                | '/' eval:x answer(Self / x)
+                | '=' eval:x answer(Self == x)
+                | '<' eval:x answer(Self < x)
+                | '>' eval:x answer(Self > x),
+
+  String  '('   = eval:x ')' answer(x)
+}
+
+messageStream = ["(", 2, "*", 3, ")", "+", 4]
+ST72.matchAll(messageStream, "eval")
+
+ undefined
