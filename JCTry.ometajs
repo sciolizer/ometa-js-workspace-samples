@@ -1,0 +1,107 @@
+/*
+program = "deftype Receiver;
+network.online();
+def Thread := jlobby.java.lang.Thread;
+def Long := jlobby.java.lang.Long;
+def Date := jlobby.java.util.Date;
+whenever: Receiver discovered: { |r|
+        while: {x.<(300)} do: {
+                x := x.+(1);
+                r.put(x, Date.new().getTime().toString().parseNumeric());
+                system.println(x);
+                Thread.sleep(Long.new(\"100\"));
+        };
+};"
+
+program = "network.online();
+deftype Receiver;
+def y := 0;
+def Date := jlobby.java.util.Date;
+def Long := jlobby.java.lang.Long;
+def service := object: {
+        def put(x, send_time) {
+                y := y.+(1);
+                def rec_time := Date.new().getTime().toString().parseNumeric();
+                def et := rec_time.-(send_time);
+                system.print(x);
+                system.print(\" - \");
+                system.print(send_time);
+                system.print(\" - \");
+                system.print(rec_time);
+                system.print(\" - \");
+                system.println(et);
+        };
+};
+export: service as: Receiver;"
+
+*/
+
+
+ometa AT <: Parser {
+   space        = ~'\n' super(`space),
+   identifier   = spaces firstAndRest(`nameFirst, `nameRest):r -> ["identifier", r.join('')],
+   nospacesid   = firstAndRest(`nameFirst, `nameRest):r -> ["identifier", r.join('')],
+   symbol       = '+' | '/' | '%' | '*' | '^' | '#' | '@' | '!' | '-' | '=' | '<' | '>' | '?' | '~' | '_',
+   nameFirst    = letter,
+   nameRest     = (letter|number|symbol),
+   methodName   = (spaces|) (letter|number|symbol)+:x -> x.join(''),
+   path         = listOf("methodName", "."):p ~~break -> ["path", p.join('.')],
+   number       = spaces digit+:n -> ["number", n],
+   string       = seq('"""')  (escapeChar | ~seq('"""') char)*:cs seq('"""')  -> [`string, cs.join('')]
+                | '"'         (escapeChar | ~'"'  char)*:cs '"'               -> [`string, cs.join('')],
+   table        = "[" listOf("expression", ","):e "]" -> ["table", e],
+   closure      = "{" "|" listOf("identifier", ","):a "|" inner:c "}" -> ["closure", ["args", a], ["inner", c]]
+                | "{" inner:c "}" -> ["closure", ["inner", c]]
+                | "{" "}" -> ["closure", []],
+   application  = methodName:m "(" spaces listOf("expression", ","):a ")" -> ["apply", m, a],
+   messageSend  = keywordedSend
+                | (primexpr | selfMessageSend | literal):r "." listOf(`application, '.'):a -> ["send", r, a]
+                | selfMessageSend,
+   selfMessageSend = application:a -> ["send", "self", a],
+   keywordedSend = (kSend)+:e break -> ["keywordSend", e],
+   kSend         = keyword:k spaces expression:e -> [k, e],
+   lonelyexpr   = expression:e break -> e,
+   expression   = primexpr:e -> e
+                | messageSend:m -> m
+                | literal:l -> l
+                | ";",
+   literal      = number
+                | string
+                | closure
+                | table
+                | identifier,
+   primexpr     = "(" expression:e ")" -> ["primexpr", e],
+   keyword      = identifier:k ~space ":" -> ["keyword", k],
+   definition   = "def" spaces methodName:i "(" listOf("identifier", ","):args ")" "{" inner:c "}" -> ["define_method", i, args, c]
+                | "def" identifier:i ":=" spaces path:p -> ["define", i, p]
+                | "def" identifier:i ":=" spaces expression:e -> ["define", i, e],
+   assignment   = identifier:i ":=" spaces path:p -> ["assign", i, p]
+                | identifier:i ":=" spaces expression:e -> ["assign", i, e],
+   defType      = "deftype" spaces identifier:i -> ["defType", i],
+   import       = "import" spaces path:x -> ["import", x],
+   statement    = definition:d break -> d
+                | assignment:a break -> a
+                | import:i break -> i
+                | defType:i break -> i,
+   break        = breakChars spaces,
+   breakChars   = ";" "\n" | ";" end | "\n" end | ";" | "\n" | end,
+   inner        = (break | spaces) (statement | lonelyexpr | expression)+:i -> i,
+   program      = spaces (statement | lonelyexpr)+:e spaces end -> e
+}
+
+ometa ATCompiler {
+  top [inner+:ans] -> ans.join(";"),
+  inner [anything:t apply(t):ans]  -> ans,
+  innerList [inner+:t]             -> t,
+  identifier :i                    -> i,
+  number     :i                    -> i,
+  path   :p                        -> p,
+  import inner:p                   ->  ("import " + p + ";"),
+  keyword :k                       -> k,
+  table innerList:t                -> t
+}
+
+
+program = "[a, b, c]"
+ast = AT.matchAll(program, "program")
+ATCompiler.match(ast, "top")
