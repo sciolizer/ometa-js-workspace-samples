@@ -1,0 +1,91 @@
+OMeta selftest DSL
+
+Using the tiny ecmaunit.js framework from the Kupu project (see http://codespeak.net/svn/kupu/trunk/ecmaunit/), the following OMeta transformation can serve as a JavaScript code generator for a test DSL.
+
+DSL example: A basic test of first-order rules (i.e. simply parametrized rules) could be designed as follows:
+
+matchTest (first order rule) {
+  rule: hlr('a'), hlr :x = anything:c ?(c==x);
+  expectMatch (one a): 'a';
+  expectMatchFails (one b): 'b';  
+  }
+
+The expressions in round brackets are simple comments. The "rule" expression contains the rules or rule sets to be tested. The lines "expectMatch" and "expectMatchFails" check whether the matchAll method for the rule terminates regularly or gives a "match failed" exception. I used the semicolon ";" on purpose as terminator for the different declarations, since it seems not to be used in the OMeta/Js syntax itself, so the end of the "rule:..." declaration can easily be detected.
+
+ecmaunit.js would expect a more verbose JavaScript code for such a test:
+
+function TestMatchFirstOrderRule() {
+    this.name = 'TestMatchFirstOrderRule';    
+    this.setUp = function() {
+      var t = translateCode( "ometa M { _r = hlr('a'), hlr :x = anything:c ?(c==x) }" );
+      eval(t);
+      };
+    this.testMatchesOneA = function() {
+      this.assert( M.matchAll( 'a', '_r' ) );
+      };
+    this.testMatchFailsOneB = function() {
+      this.assertThrows( function(){ M.matchAll( 'b', '_r' ) } );         
+      };
+}
+TestMatchFirstOrderRule.prototype = new TestCase;
+
+// finally:
+
+function registerGeneratedTests( testsuite ) {
+  // ... register all test classes here
+  testsuite.registerTest(TestMatchFirstOrderRule);
+  }
+
+
+Happily, this JS code can be generated automatically from the above mini DSL using the OMeta transformation below. (The transformation in itself surely is not very elegant. An intermediate transform implementing a template mechanism like Perl's "here documents" would be a useful next step. But as it is, it serves its purpose and saves a lot of work, since I don't have to type in repetetive information, and my source states test assumptions in a more readable form. ) 
+
+The transformation accepts arbitrary many tests in the above syntax. Each test can contain arbitrary many assertions, but must have only one rule declaration (which can contain dependent rules, separated with a comma).
+
+ometa M <: Parser { 
+  total = (spaces matchTest)+:t -> {t.join('\n')+"
+
+function registerGeneratedTests( testsuite ) {"+self.registries+"
+  }
+"},
+  matchTest = "matchTest" description:d "{" rule:r tests:t ';'? "}" ->{self.registries+="
+  testsuite.registerTest(TestMatch"+d+");";"
+function TestMatch"+d+"() {
+    this.name = 'TestMatch"+d+"';
+    
+    this.setUp = function() {
+      var t = translateCode( \"ometa M { _r = "+r+" }\" );
+      eval(t);
+      };
+"+t+"
+}
+TestMatch"+d+".prototype = new TestCase;
+"},  
+  tests = (";" test)*:t ->t.join("\n"),
+  rule = "rule" ":" expr,
+  test = testMatch | 
+         testMatchFails,    
+  testMatch = "expectMatch" description:d ":" expr:e  ->{"
+    this.testMatches"+d+" = function() {
+      this.assert( M.matchAll( "+e+", '_r' ) );
+      };
+"},    
+  testMatchFails = "expectMatchFails":t description:d ":" expr:e ->{"
+    this.testMatchFails"+d+" = function() {
+      this.assertThrows( function(){ M.matchAll( "+e+", '_r' ) } );         
+      };
+"},
+  expr =  spaces ( seq('\\;') | seq('\\}') | ~';' ~'}' anything)+:c spaces -> c.join('').strip(),
+  description = "(" (~')' anything)+:x ")" -> { (" "+x.join('').strip()).replace(new RegExp(" +","g"),"-").camelize() }
+  }
+
+M.initialize = function() { this.registries = ""; }
+
+The following code transforms the selftest DSL into the JS code as expected from ecmaunit.js:
+
+M.matchAll( "
+matchTest (first order rule) {
+rule: hlr('a'), hlr :x = anything:c ?(c==x);
+expectMatch (one a): 'a';
+expectMatchFails (one b): 'b';  
+}
+","total");  
