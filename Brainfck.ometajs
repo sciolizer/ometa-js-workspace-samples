@@ -1,0 +1,59 @@
+// An implementation of the Brainf*ck programming language.
+// http://en.wikipedia.org/wiki/Brainf*ck
+
+ometa BF {
+  eval      = evalOne+,
+  evalOne   = increment_ptr
+            | decrement_ptr
+            | increment_memory
+            | decrement_memory
+            | output_memory
+            | input_memory
+            | jump_forward
+            | jump_backward,
+  increment_ptr    = '>' -> '++this.ptr;',
+  decrement_ptr    = '<' -> '--this.ptr;',
+  increment_memory = '+' -> '++this.memory[this.ptr];',
+  decrement_memory = '-' -> '--this.memory[this.ptr];',
+  output_memory    = '.' -> 'textNode.nodeValue += String.fromCharCode(this.memory[this.ptr]);',
+  input_memory     = ',' -> '(0 == 0);', // TODO
+  jump_forward     = '[' -> 'while (this.memory[this.ptr] != 0) {',
+  jump_backward    = ']' -> '}'
+}
+
+// A BF "virtual machine" to perform the evaluation.
+// This might not be the best approach, but I ran into problems doing things directly in the parser because of the "jumps".
+bfEval = function(bfProgram)
+{
+  // Add a text node to see the output.
+  // This will remove all children first, if necessary.
+  $('playArea').innerHTML = ""
+  textNode = document.createTextNode("Output: ")
+  $('playArea').appendChild(textNode)
+
+  // Setup the memory and instruction pointer.
+  this.bfProgram = bfProgram;
+  this.memory = new Array();
+  this.memory.length = 30000;
+  for (var i = 0; i < 30000; i++)
+  {
+    this.memory[i] = 0;
+  }
+  this.ptr = 0;
+
+  // A method for performing the evaluation.
+  this.run = function()
+  {
+    textNode.nodeValue = eval(BF.matchAll(this.bfProgram, "eval").join(' '));
+  }
+}
+
+
+// TEST #1 - Output the letter 'A', the hard way.
+new bfEval("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++.").run()
+
+// TEST #2 - Output the letter 'A', with a loop.
+new bfEval("+++++++++++++[>+++++<-]>.").run()
+
+// TEST #3 - Print 'Hello World!'
+new bfEval("++++++++++[>+++++++>++++++++++>+++>+<<<<-]>++.>+.+++++++..+++.>++.<<+++++++++++++++.>.+++.------.--------.>+.>.").run()
