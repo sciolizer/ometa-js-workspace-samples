@@ -1,0 +1,331 @@
+//
+// This file contains OMeta definitions for classes that run in the JS 2.0 Workspace
+// and generate C# code. This is the first part of a bootstrap process to get to a
+// version of OMeta implemented in C# to generate parsers in C#. The OMeta parser
+// defined here takes as input the parsers defined in project OMeta_On_CSharp, which
+// have host code written in C#. Neither these classes nor the definitions in
+// OMeta_On_CSharp reflect the intended form of the final C# implementation; they are
+// just part of the bootstrap pipeline.
+//
+// Status:
+// Generating working C# from contents of OMeta_On_CSharp project. Still testing.
+// This toolchain is nearing feature freeze.
+// 2008-7-07
+//
+// Requirements on input to OMetaParserJsToCSharp:
+//
+// - All semantic predicates and semantic actions in the input must be delimited by curly braces,
+//   which are considered part of the OMeta syntax, not part of the host code. This makes
+//   for simplified host code parsing. Note that this is consistent with, but more limited than,
+//   OMeta/JS 2.0.
+// - Argument lists must also be delimited by curly braces, not by parentheses. This is different
+//   from OMeta/JS 2.0. Again, this simplifies host code parsing.
+//
+// Characteristics of host code:
+// - The C# code in semantic predicates and actions must include explicit return statements.
+// - Class-specific variables can be simulated using the indexing operator on this. E.g.
+//   this["myVariable"] denotes a modifiable storage location which is initially null.
+// - Rule-specific variables are all of type System.Object. A lot of casting is required
+//   to do anything.
+//
+// Author: Dan Muller (pikdj2002@sneakemail.com)
+
+//
+// A minimal recognizer for delimited C# expressions, suitable for picking
+// out the semantic actions, predicates, and rule arguments of C# as a host
+// language. We only need to correctly count delimiters.
+//
+ometa CSharpishCodeJsToCSharp {
+
+  code = (parenExpr | block | sqChar | dqString | exactString | comment | chunk)+:xs   -> xs.join(''),
+
+  // Blocks are any valid constructs inside of braces. They might
+  // be blocks of statements, or initialization blocks.
+  block        = '{' code*:xs '}'        -> ['{', xs.join(''), '}'].join(''),
+
+  // Parenthesized expressions are any valid constructs inside of
+  // parentheses.
+  parenExpr    = '(' code*:xs ')'        -> ['(', xs.join(''), ')'].join(''),
+
+  // Chunks are arbitrary non-empty sequences of code, but never contain delimiters for
+  // any quoted construct.
+  chunk = (~('\"' | '{' | '}' | '(' | ')' | seq("/*") | seq("//") | seq("@\"") | '\'') char)+:xs -> xs.join(''),
+
+  eChar = '\\' char:c                            -> ['\\', c].join('')
+        | char,
+  sqChar = '\'' eChar:x '\''                     -> ['\'', x, '\''].join(''),
+  dqString = '\"' (~'\"' eChar)*:xs '\"'         -> ['\"', xs.join(''), '\"'].join(''),
+  // The exact string is peculiar to C#, AFAIK. @"..." with no escapes recognized.
+  exactString = '@' '\"' (~'\"' char)*:xs '\"'   ->  ['@\"', xs.join(''), '\"'].join(''),
+  // C-family comments:
+  comment = fromTo("//", "\n") | fromTo("/*", "*/"),
+  fromTo :x :y   = seq(x):a (~seq(y) char)*:bs seq(y):c -> [a, bs.join(''), c].join('')
+}
+
+testCSharp = function ()
+{
+  return CSharpishCodeJsToCSharp.matchAll(arguments[0], "code");
+}
+
+//testCSharp("\"//\", '\\n')")
+//testCSharp("new List {\"a\", \'b\', new Foo( a*3, null ) }}")
+//testCSharp("var f = Foo(); var b = new Bar(f, f != null | switchedOn);")
+//testCSharp("var puzzle = string.Concat(); puzzle = new List {}")
+
+isCSharpish = function() {
+  var r = CSharpishCodeJsToCSharp.matchAll(arguments[0], "code");
+  if (r != arguments[0])
+    throw "Got this: " + r;
+  return r;
+}
+
+isCSharpish("{\"a string\";}")
+isCSharpish("(a.foo(b)c)")
+isCSharpish("{%$;}")
+isCSharpish("{%$a @asdsaa;}")
+isCSharpish("{\"a string\";\"another\";(abba,boo-boo);{nested; block;}}")
+isCSharpish("((several, expressions/* with comments! */, delegate {return values;}, for, an, // Ignore me.
+argument(list)))")
+
+//
+// This defines a parser that runs in the JS workspace to process OMeta syntax with
+// embedded CSharp(ish) host expressions.
+//
+// Deviations from the original parser:
+// - All host code is delimited by curly braces, which are part of the OMeta grammar.
+//   - Argument lists are surrounded by braces instead of parens.
+//   - Semantic predicate introducers (?, !) are followed by braces, not parens.
+//   - Semantic actions are delimited by braces.
+// - Semantic actions and predicates must include explicit returns.
+//
+ometa OMetaParserJsToCSharp <: Parser {
+  fromTo :x :y   = seq(x) (~seq(y) char)* seq(y),
+  space          = super(#space) | fromTo('//', '\n') | fromTo('/*', '*/'),
+  nameFirst      = '_' | '$' | letter,
+  nameRest       = nameFirst | digit,
+  tsName         = firstAndRest(#nameFirst, #nameRest):xs              -> xs.join(''),
+  name           = spaces tsName,
+  eChar          = '\\' char:c                                         -> unescape('\\' +c)
+                 | char,
+  tsString       = '\'' (~'\'' eChar)*:xs '\''                         -> xs.join(''),
+  characters     = '`' '`' (~('\'' '\'') eChar)*:xs '\'' '\''          -> [`App, "\"seq\"",     xs.join('').toProgramString()],
+  sCharacters    = '"'     (~'"'         eChar)*:xs '"'                -> [`App, "\"token\"",   xs.join('').toProgramString()],
+  string         = (('#' | '`') tsName | tsString):xs                  -> [`App, "\"exactly\"", xs.toProgramString()],
+  number         = ('-' | empty -> ''):sign digit+:ds                  -> [`App, "\"exactly\"", sign + ds.join('')],
+  keyword :xs    = token(xs) ~letterOrDigit                            -> xs,
+  hostCode       = foreign(CSharpishCodeJsToCSharp, `code),
+  args           = "{" hostCode:x "}"                                  -> x
+                 | empty                                               -> [],
+  application    = name:rule args:as                                   -> [`App, rule.toProgramString()].concat(as),
+  semAction      = ("!" | "->") "{" hostCode:x "}"                     -> [`Act,  x],
+  semPred        = "?" "{" hostCode:x "}"                              -> [`Pred, x],
+  expr           = listOf(#expr4, '|'):xs                              -> [`Or].concat(xs),
+  expr4          = expr3*:xs                                           -> [`And].concat(xs),
+  optIter :x     = "*"                                                 -> [`Many,  x]
+                 | "+"                                                 -> [`Many1, x]
+                 | empty                                               -> x,
+  expr3          = expr2:x optIter(x):x ( ':' name:n                   -> { self.locals.push(n); [`Set, n, x] }
+                                        | empty                        -> x
+                                        )
+                 | ":" name:n                                          -> { self.locals.push(n); [`Set, n, [`App, "\"anything\""]] },
+  expr2          = "~" expr2:x                                         -> [`Not,       x]
+                 | "&" expr1:x                                         -> [`Lookahead, x]
+                 | expr1,
+  expr1          = application | semAction | semPred
+                 | ( keyword('undefined') | keyword('nil')
+                   | keyword('true')      | keyword('false') ):x       -> [`App, "\"exactly\"", x]
+                 | spaces (characters | sCharacters | string | number)
+                 | "[" expr:x "]"                                      -> [`Form, x]
+                 | "(" expr:x ")"                                      -> x,
+  ruleName       = name
+                 | spaces tsString,
+  rule           = &(ruleName:n) !(self.locals = [])
+                     rulePart(n):x ("," rulePart(n))*:xs               -> [`Rule, n, self.locals, [`Or, x].concat(xs)],
+  rulePart :rn   = ruleName:n ?(n == rn) expr4:b1 ( "=" expr:b2        -> [`And, b1, b2]
+                                                  | empty              -> b1
+                                                  ),
+  grammar        = keyword("ometa") name:n
+                     ( "<:" name | empty -> "OMeta" ):sn
+                     "{" listOf(#rule, ','):rs "}"                     -> [`Grammar, n, sn].concat(rs)
+}
+
+//
+// Rules are coded as private, non-virtual instance methods.
+//
+// A parser class derives from its super-grammar's parser class, or from
+// OMeta by default.
+//
+// The grammar class's constructor initializes _rules with the delegates for
+// each rule that it defines. These can be static or instance delegates.
+//
+// Argument expressions must be true expressions.
+//
+// Semantic predicates and actions are list of statements. As such, statements
+// must be terminated, and explicit returns are required.
+//
+// Local rule variables for use solely by host expressions can be declared
+// by specifying empty:vname as a rule argument, where vname is the name of
+// the variable.
+//
+// ParserBase defines a protected indexing accessor that allows grammars to
+// create arbitrary string/value associations conveniently:
+//
+//   this["gvar"] = some-value;
+//
+//
+CSharpParserBoilerplate =
+"
+// Generated by OMeta_To_CSharp bootstrap classes.
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using OMetaBase;
+namespace {0}
+{
+    public class {1} : {2}
+    {
+        private IDictionary<string, Code> _rules = new Dictionary<string, Code>();
+        
+        protected override Code FindRule(string name)
+        {
+            Code code;
+            if (_rules.TryGetValue(name, out code))
+                return code;
+            return base.FindRule(name);
+        }
+        protected override object App(string name, params object[] args)
+        {
+            Code code;
+            if (_rules.TryGetValue(name, out code))
+                return ApplyCode(code, name, args);
+            return base.App(name, args);
+        }
+
+        public {1} ()
+        {
+            // Rule registration.
+{3}
+        }
+        // Rule methods.
+{4}
+    }
+}
+"
+CSharpRuleRegistration = "            _rules[\"{0}\"] = Rule_{0};\n"
+CSharpRuleDefinition = "\n        private object Rule_{0} ()\n        {\n            {1}\n            {2}\n        }\n"
+
+//------------------------------------------------------------------------------
+// This is a workaround for the apparent lack of regular expression support in
+// OMeta/JS. (Actually, I think that may have been a misunderstanding on
+// my part -- may this JS just doesn't support the /../ notation.)
+// Emulates .NET's string formatting.
+
+ometa Format <: Parser {
+  format empty:i ?{i = 0; true} [ string:fmt (argx(fmt, i++):fmt)* ] -> fmt,
+  argx :str :x :value = replaceG(str, ['{', x, '}'].join(''), value),
+  replaceG :str :oldsub :newsub -> {
+                                     var newstr = str;
+                                     do {str = newstr;
+                                         newstr = str.replace(oldsub, newsub);
+                                        } while (newstr != str);
+                                     newstr
+                                   }
+} 
+format = function () {
+  var args = Array.prototype.slice.call(arguments);
+  return Format.match(args, "format");
+}
+//format("{0} more {1}, more {1}, I say, {0} {1}!", "eat", "beans")
+
+//
+// Helper function for assembling the pieces that make up
+// the parser source code.
+makeParserSource = function (namespace, name, sName, rules)
+{
+  var ruleRegs = "";
+  var ruleDefs = "";
+  var ruleName, ruleLocals, ruleBody, ruleLocalDefs;
+  for (var i = 0; i < rules.length; i++)
+  {
+    ruleName   = rules[i][0];
+    ruleLocals = rules[i][1];
+    ruleBody   = rules[i][2];
+    ruleLocalDefs = ""
+    for (var j = 0; j < ruleLocals.length; j++)
+    {
+      ruleLocalDefs += ["object ", ruleLocals[j], " = null;\n"].join('');
+    }
+    ruleRegs  = ruleRegs + format(CSharpRuleRegistration, ruleName);
+    ruleDefs  = ruleDefs + format(CSharpRuleDefinition, ruleName, ruleLocalDefs, ruleBody);
+  }
+  return format(CSharpParserBoilerplate, namespace, name, sName, ruleRegs, ruleDefs);
+}
+//makeParserSource("ns", "n", "sn", [["rulez", ["a", "b"], "null"]]);
+//format(CSharpRuleDefinition, "rulez", "object a = null;\nobject b = null;", "null");
+
+//------------------------------------------------------------------------------
+
+// By dispatching on the head of a list, the following idiom allows translators to avoid doing a linear search.
+// (Note that the "=" in a rule definition is optional, which can be used to get an ML "feel".)
+
+ometa OMetaTranslatorJsToCSharp {
+  trans [:t apply(t):ans]             -> ans,
+  transFn = trans:x asFnArg(x),
+  asFnArg = string:x       -> ["delegate {", x, "}"].join(''),
+
+  App  '\"super\"' :rule anything+:args -> ["return base.App(", rule, ", ", args.join(','), ");"]        .join(''),
+  App  '\"super\"' :rule                -> ["return base.App(", rule, ");"]        .join(''),
+  App  :rule   anything+:args         -> ["return App(", rule, ",", args.join(','), ");"]    .join(''),
+  App  :rule                          -> ["return App(", rule, ");"]                         .join(''),
+  Act  :expr                          -> expr,
+  Pred :expr                          -> ["return Pred( delegate\n{\n", expr, "\n});"]           .join(''),
+  Or   transFn*:xs                    -> ["return Or(", xs.join(',\n'), ");"]                              .join(''),
+  And  transFn*:xs                    -> ["return And(", xs.join(',\n'), ");"]				   .join(''),
+  Many  transFn:x                     -> ["return Many(", x, ");"]                                         .join(''),
+  Many1 transFn:x                     -> ["return Many1(", x, ");"]                                        .join(''),
+  Set   :n transFn:v                  -> ["return Set( ref ", n, ", ", v, ");"]                            .join(''),
+  Not   transFn:x                     -> ["return Not(", x, ");"]                                          .join(''),
+  Lookahead transFn:x                 -> ["return Lookahead(", x, ");"]                                    .join(''),
+  Form  transFn:x                     -> ["return Form(", x, ");"]                                         .join(''),
+  Rule  :name locals:ls trans:body    -> [name, ls, body],
+  Grammar :name :sName
+          !(self.sName = sName)
+          trans*:rules                -> makeParserSource("OMetaBootstrap", name, sName, rules),
+  locals  = []                        -> ''
+          | [apply(#unique):vs]        -> vs,
+
+  // Unique transforms the input stream into a list from which duplicates have been removed.
+  unique  = string:x ~any(x) unique:rest -> [x].concat(rest)
+          | string:x unique
+          | empty -> [],
+
+  // any(x) matches if the input stream contains any object that exactly matches x
+  any :x  = exactly(x) | anything any(x)
+}
+
+parseGrammar = function(g) { return OMetaParserJsToCSharp.matchAll(g, "grammar") }
+parseAndCompileGrammar = function(g) { return OMetaTranslatorJsToCSharp.match(parseGrammar(g), "trans") }
+optimizeGrammar = function(g) { return BSOMetaOptimizer.match(parseGrammar(g),"optimizeGrammar") }
+getGrammar = function ()
+{
+  var s = readFile("OMeta_On_CSharp");
+  var g = arguments[0];
+  var re = new RegExp("\nometa " + g);
+  var i = s.search(re);
+  var s = s.substr(i);
+  i = s.search(new RegExp("\n}"));
+  return s.substr(0, i+3);
+}
+compileGrammar = function (g) {return OMetaTranslatorJsToCSharp.match(optimizeGrammar(getGrammar(g)), "trans") }
+
+// Highlight and use "print it" on each of these calls to generate the C# for each
+// component of the next stage of the bootstrap process.
+
+//compileGrammar("CSharpishCode")
+
+//compileGrammar("Parser")
+
+//compileGrammar("OMetaParser")
+
+//compileGrammar("OMetaTranslator")
+
