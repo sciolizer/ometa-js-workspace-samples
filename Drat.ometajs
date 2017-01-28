@@ -1,0 +1,114 @@
+ometa DratParser <: Parser {
+
+  fromTo :x :y = seq(x) (~seq(y) char)* seq(y),
+  space        = ^space | fromTo('//', '\n') | fromTo('/*', '*/'),
+  identFirst   = letter,
+  identRest    = identFirst | digit,
+  ident        = firstAndRest(#identFirst, #identRest):r -> r.join(''),
+  isKeyword :x = ?DratParser._isKeyword(x),
+  isPseudoKeyword :x = ?DratParser._isPseudoKeyword(x),
+  name         = ident:n ~(isKeyword(n) || isPseudoKeyword(n)) -> [#name, n],
+  keyword      = ident:k isKeyword(k) -> [k,k],
+  pseudoKeyword = ident:k isPseudoKeyword(k) -> [k,k],
+  hexDigit     = char:x {this.hexDigits.indexOf(x.toLowerCase())}:v ?(v >= 0) -> v,
+  hexLit       = hexLit:n hexDigit:d -> (n * 16 + d)
+                 | hexDigit,
+  number       =  ``0x'' hexLit:n -> [#number, n]
+                 | digit+:ws ('.' digit+ | empty -> []):fs -> [#number, parseFloat(ws.join('') + '.' + fs.join(''))],
+  escapeChar   = '\\' char:c -> unescape('\\' + c),
+  str          = seq('"""') (escapeChar | ~seq('"""') char)*:cs seq('"""') -> [#string, cs.join('')]
+                 | '\'' (escapeChar | ~'\'' char)*:cs '\'' -> [#string, cs.join ('')]
+                 | '"' (escapeChar | ~'"' char)*:cs '"' -> [#string, cs.join ('')]
+                 | ('#' | '`') ident:i -> [#string, i],
+  special      = ('(' | ')' | '{' | '}' | '[' | ']' | ','
+                 | ';' | '?' | ':' 
+                 | ``&&'' | ``||''):s -> [s,s],
+  tok          = spaces (name | keyword | pseudoKeyword | number | str | special),
+  toks         = token*:ts spaces end -> ts,
+  token :tt    = tok:t ?(t[0] == tt) -> t[1],
+
+  expression = conditionalExpression:e -> [#expression, e],
+  conditionalExpression = logicalOrExpression:e ('?' expression:t ':' expression:f -> [#conditionalExpression, e, t, f]
+                                                | empty),
+  logicalOrExpression = logicalOrExpression:x "||" logicalAndExpression:y  -> [#binop, '||', x, y]
+                      | logicalAndExpression,
+  logicalAndExpression = logicalAndExpression:x "&&" bitwiseOrExpression:y -> [#binop, '&&', x, y]
+                       | bitwiseOrExpression,
+  bitwiseOrExpression = bitwiseOrExpresssion:x '|' bitwiseXorExpression:y -> [#binop, '|', x, y]
+                      | bitwiseXorExpression,
+  bitwiseXorExpression = bitwiseXorExpression:x '^' bitwiseAndExpression:y -> [#binop, '^', x, y]
+                       | bitwiseAndExpression,
+  bitwiseAndExpression = bitwiseAndExpression:x '&' equalityExpression:y -> [#binop, '&', x, y]
+                       | equalityExpression,
+  equalityExpression = equalityExpression:x ( "==" relationalExpression:y  -> [#binop, '==', x, y]
+                                            | "!=" relationalExpression:y  -> [#binop, '!=', x, y]
+                                            | "===" relationalExpression:y -> [#binop, "===", x, y]
+                                            | "!==" relationalExpression:y -> [#binop, "!==", x, y] 
+                                            )
+                     | relationalExpression,
+  relationalExpression = relationalExpression:x ( ">"  addExpression:y -> [#binop, ">",  x, y]
+                                                | ">=" addExpression:y -> [#binop, ">=", x, y]
+                                                | "<"  addExpression:y -> [#binop, "<",  x, y]
+                                                | "<=" addExpression:y -> [#binop, "<=", x, y]
+                                                | "is" "name":n        -> [#binop, "is", x, n]
+                                                )
+                       | addExpression,
+  addExpression = addExpression:x '+' multExpression:y -> [#binop, "+", x, y]
+                | addExpression:x '-' multExpression:y -> [#binop, "-", x, y]
+                | multExpression,
+  multExpression = multExpression:x "*" unaryExpression:y -> [#binop, "*", x, y]
+                 | multExpression:x "/" unaryExpression:y -> [#binop, "/", x, y]
+                 | multExpression:x "%" unaryExpression:y -> [#binop, "%", x, y]
+                 | unaryExpression,
+  // shortcut start here RPR
+  unaryExpression = "name":n   -> [#name, n]
+                  | "number":n -> [#number, n]
+                  | "string":s -> [#strings, s],
+
+  constantExpression = expression:e -> [#constantExpression, e],
+  staticFinalDecl = "name":n "=" constantExpression:c -> [#binding, n, c],
+  staticFinalDeclList = listOf(#staticFinalDecl, ","):ds -> [#decls, ds],
+  declaration  = staticFinalDeclList:ds -> [#staticFinalDecls, ds],
+
+  typeParameter   = "name":n -> [#typeParameter, n],
+  typeParameters  = '<' listOf(#typeParameter, ','):ts '>' -> [#typeParams].concat(ts),
+  superClass      =  "extends" "name":n -> [#superClass, n] 
+                  | empty,
+  interface       = "name":n -> [#interface, n],
+  interfaces      = "implements" listOf(#interface, ","):is -> [#interfaces].concat(is)
+                  | empty,
+
+  classMember  = declaration:d -> [#classMember, d],
+  classMembers = classMember*:ms -> [#classMembers, ms],
+  classDefinition = "class" "name":n typeParameters:ts superClass:s interfaces:i "{" -> [#class, n, ts, s, i],
+
+  topLevel     = classDefinition
+
+}
+
+DratParser.hexDigits = "0123456789abcdef"
+DratParser.keywords = { }
+keywords = ["break", "case", "catch", "const", "continue", "default", "do", "else", 
+            "false", "final", "finally", "for", "if", "in", "new", "null", "return", 
+            "super", "switch", "this", "throw", "true", "try", "var", "void", "while"]
+DratParser.pseudoKeywords = { }
+pseudoKeywords = ["abstract", "assert", "class", "extends", "factory", "get", "implements", 
+                  "import", "interface", "is", "library", "native", "negate", "operator", 
+                  "set", "source", "static", "typedef"]
+for (var idx = 0; idx < keywords.length; idx++)
+  DratParser.keywords[keywords[idx]] = true
+for (var idx = 0; idx < pseudoKeywords.length; idx++)
+  DratParser.pseudoKeywords[pseudoKeywords[idx]] = true
+DratParser._isKeyword = function(k) {return this.keywords.hasOwnProperty(k)}
+DratParser._isPseudoKeyword = function(k) {return this.pseudoKeywords.hasOwnProperty(k)}
+
+// TEST PARSE
+
+DratParser.matchAll ("<String, Int>", 'typeParameters')
+DratParser.matchAll ("<String>", 'typeParameters')
+DratParser.matchAll ("class Cat<String, Int> {", 'classDefinition') 
+DratParser.matchAll ("class Cat<String, Int> extends String {", 'classDefinition')
+DratParser.matchAll ("class Cat<String, Int> extends String implements Compare, Iterate {", 'classDefinition')
+
+DratParser.matchAll ('0xff', 'tok')
+DratParser.matchAll ('/* */ ray', 'tok')
