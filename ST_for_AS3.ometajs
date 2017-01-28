@@ -1,0 +1,467 @@
+/*************************************
+ ***  A smalltalk parser             *
+ ***  contact: chris.smoak@gmail.com */
+
+// a work in progress... compiles to as3, which i have a separate interpreter for. ; Parse error ->)
+// use the "transcript" production for best results.
+// currently has issues with extraneous '.'s when parsing "transcript"s.
+
+Array.prototype.append = function(arr) {
+  this[this.length] = arr;
+  return this;
+}
+
+//beginparser
+ometa STParser <: Parser {
+  transcript            = listOf(#transcriptStatement, "!"):s 
+                          ("." | "!" | empty) spaces end                      -> [`transcript].concat(s),
+  transcriptStatement   = ( declarations
+                          | temporaries:t listOf(#expression, "."):e          -> [`topLevel, t].concat(e)
+                          ),
+  declarations          = "!" expression:e 
+                          "!" (method:m "!" -> m)*:m space ~~"!"              -> [`methodDecls, e].concat(m),
+  method                = messagePattern:m 
+                          temporaries:t 
+                          (primitiveDeclaration | empty -> []):p 
+                          statements:s                                        -> [`method].concat(m).concat([t, p]).concat(s),
+  messagePattern        = keywordsAndArgumentNames 
+                        | "binarySelector":b argumentName:a                   -> [b, [a]] 
+                        | unarySelector:u                                     -> [u, []],
+  keywordsAndArgumentNames = (keyword:k argumentName:n -> [k, n])+:kk         -> { var ks = kk.map(function(i) { return i[0] });
+                                                                                   var ns = kk.map(function(i) { return i[1] });
+                                                                                   [ks.join(''), ns] },
+  temporaries           = ("|" variableName*:v "|" -> v | empty -> []):v      -> v,
+  primitiveDeclaration  = "<" primitiveKeyword natural:n ">"                  -> [`primitive, n],
+  block                 = "[" ((":" argumentName)+:a "|" -> a | empty -> []):a
+                              temporaries:t
+                              statements:s "]"                                -> [`block, a, t].concat(s),
+  statements            = ((expression:e "." ~~("^" | expression) -> e)* | empty -> []):es 
+                          (("^" | empty) expression:re ("." | empty) -> [true, [`return, re]] | empty -> [false, []]):re
+                                                                              -> { re[0] ? es.append(re[1]) : es },
+  braceExpression       = "{" listOf(#expression, "."):es "}"                 -> [`array].concat(es),
+  expression            = "identifier":v "assignmentOp" expression:e          -> [`assign, v, e]
+                        | messageExpression:m 
+                          ( ?(m[0] == `send) cascadedMessages 
+                          | empty -> []
+                          ):c                                                 -> { c.length > 0 ? m.concat(c) : m },
+  primary               = name | literal | block | braceExpression | ("(" expression:e ")" -> e),
+  cascadedMessages      = (";" ( keywordsAndArguments
+                               | unarySelector:u                       -> [u] 
+                               | "binarySelector":bs unaryExpression:u -> [bs, u]
+                               ))+,
+  messageExpression     = keywordExpression
+                        | binaryExpression,
+  keywordExpression     = binaryExpression:r keywordsAndArguments:sa          -> [`send, r].append(sa),
+  binaryExpression      = binaryExpression:r "binarySelector":s unaryExpression:a -> [`send, r, [s, a]]
+                        | unaryExpression,
+  unaryExpression       = unaryExpression:r unarySelector:s                   -> [`send, r, [s]]
+                        | primary,
+  keywordsAndArguments  = (keyword:k binaryExpression:bd -> [k, bd])+:kk      -> { var k = kk.map(function(i) { return i[0] });
+                                                                                   var a = kk.map(function(i) { return i[1] });
+                                                                                   [k.join('')].concat(a) },
+  primitiveKeyword      = "identifier":i ?(i == `primitive) ":",
+  keyword               = "identifier":i ":"                                  -> (i + ":"),
+  binarySelector        = (specialCharacter:s1 (specialCharacter | empty -> ''):s2
+                                                                              -> (s1 + s2)) 
+                        | ('-' (specialCharacter | empty -> ''):s2            -> ('-' + s2)) 
+                        | '|',
+  unarySelector         = "identifier":i ~":"                                 -> i,
+  argumentName          = "identifier",
+  variableName          = notKeyword,
+  name                  = notKeyword:i                                        -> [`ident, i],
+  notKeyword            = "identifier":i ~":"                                 -> i,
+  literal               = "number" 
+                        | "#" symbol:s                                        -> [`symbol, s]
+                        | "characterConstant" 
+                        | "string" 
+                        | "#" "(" literal*:c ")"                              -> [`arrayConst].concat(c)
+                        | "#" "[" byteNumber*:b "]"                           -> [`byteArray].concat(b)
+                        | "#" "{" ( ("identifier":i "." -> i)* 
+                                  | empty -> []
+                                  ):i "identifier":i2 "}"                     -> [`binding, i.append(i2).join('.')],
+  comment               = '"'  (``""'' | '\'' | space | ~'"' anything)* '"',
+  string                = '\'' ( ``\'\''' -> '\'' 
+                               | '"' 
+                               | space 
+                               | ~'\'' anything
+                               )*:cs '\''                                     -> [`string, cs.join('')],
+  characterConstant     = '$'  ( ``!!'' -> '!' 
+                               | character  
+                               | '\'' 
+                               | '"' 
+                               | ' '
+                               ):c                                            -> [`character, c],
+  symbol                = keyword+:ks -> ks.join('') | "identifier" | "binarySelector" | "string",
+  identifier            = firstAndRest(#letter, #letterOrDecimalDigit):i      -> i.join(''),
+  letterOrDecimalDigit  = letter | decimalDigit,
+  className             = captialIdentifier,
+  captialIdentifier     = notKeyword:i ?(i[0].isUpper())                      -> i,
+  assignmentOp          = ``:='' | '_',
+  character             = char:c ?('[]{}()_^;$#:-.!'.indexOf(c) != -1)        -> c
+                        | decimalDigit 
+                        | letter 
+                        | specialCharacter,
+  specialCharacter      = char:c ?('+*/\\~<>=@%&?`|,'.indexOf(c) != -1)       -> c,
+  uppercase             = upper,
+  lowercase             = lower,
+  byteNumber            = natural:n  ?(n < 256)                               -> n,
+  natural               = "number":n ?(n[0] == `integer && n[1] >= 0)         -> n[1],
+  number                = ~~char:c ?(c == '-' || (c >= '0' && c <= '9'))
+                          ('-'          -> {-1} | empty -> 1 ):rs 
+                          (radix:rr 'r' -> rr   | empty -> 10):r 
+                          digits:ws 
+                          ('.' digits:d -> [true, d] | empty -> [false, 0]):fs 
+                          ('e' ('-' -> (-1) | empty -> 1):es exponent:ex -> [true, es * ex] | empty -> [false, 0]):e
+                                                                              -> { var fp = fs[0] ? parseInt(fs[1], r) / Math.pow(r, fs[1].toString().length) : 0;
+                                                                                   var n = rs * (parseInt(ws, r) + fp);
+                                                                                   n = e[0] ? n + 'e' + e[1] : n;
+                                                                                   fs[0] || e[0] ? [`number, n]
+                                                                                                 : [`integer, n] },
+  exponent              = decimalDigits,
+  radix                 = decimalDigits,
+  digits                = (digit)+:dd                                         -> dd.join(''),
+  digit                 = decimalDigit | uppercase,
+  decimalDigits         = (decimalDigit)+:dd                                  -> dd.join(''),
+  decimalDigit          = super(#digit),
+  space                 = super(#space) | comment,
+  spaces                = space*,
+  spacesNoNL            = (~'\n' space)*,
+  cRange :x :y          = char:c ?(c >= x)
+                                 ?(c <= y)                                    -> c,
+  fromTo :x :y          = seq(x) (~seq(y) char)* seq(y),
+  tok                   = identifier:i                                        -> [`identifier, i] 
+                        | string:s                                            -> [`string, s]
+                        | number:n                                            -> [`number, n] 
+                        | characterConstant:c                                 -> [`characterConstant, c] 
+                        | assignmentOp:a                                      -> [`assignmentOp, a]
+                        | character:s                                         -> [s, s],
+  token :tt             = ( ( (spaces '.' | empty) spacesNoNL '\n' spaces 
+                            | spacesNoNL '\n' spaces ('.' spaces | empty)
+                            )                         ?(tt == '.')             -> '.'
+                          | spaces ( binarySelector:b ?(tt == `binarySelector) -> b
+                                   | tok:t            ?(t[0] == tt)            -> t[1]
+                                   )
+                          )
+}//endparser
+
+//starttrans
+ometa STTranslator{
+  trans  [:t apply(t):ans]                        -> ans,
+  transcript  trans*:s                            -> s,
+  topLevel    :t trans*:s                         -> (new Block([], t, s)),
+  return      trans:x                             -> (new Return(x)),
+  methodDecls trans:s trans*:m                    -> { var c = [];
+                                                       for (var i = 0; i < m.length; i++) {
+                                                         c.append(['defineMethod:', m[i]]);
+                                                       }
+                                                       new CascadingSend(s, c)
+                                                     },
+  method      :b :a :t (trans | anything -> 0):p trans*:s
+                                                  -> (new Method(b, a, t, s, p)),
+  send        trans:r cascade+:c                  -> { c.length > 1 ? new CascadingSend(r, c)
+                                                                    : new Send(c[0][0], r, c[0][1]) },
+  primitive   :p                                  -> p,
+  byteArray   anything*:b                         -> (new Literal(new ByteArray(b))),
+  block       :a :t trans*:s                      -> (new Block(a, t, s)),
+  array       trans*:e                            -> (new STArray(e)),
+  assign      :v trans:e                          -> (new Assignment(v, e)),
+  ident       `nil                                -> (new Literal(null)),
+  ident       `true                               -> (new Literal(true)),
+  ident       `false                              -> (new Literal(false)),
+  ident       :i                                  -> (new Variable(i)),
+  binding     :ns                                 -> (new Literal(new Binding(ns))),
+  arrayConst  trans*:c                            -> (new Literal(new ArrayConst(c))),
+  string      :s                                  -> (new Literal(String(s))),
+  character   :c                                  -> (new Literal(new Character(c))),
+  symbol      :s                                  -> (new Literal(new Symbol(s))),
+  integer     :i                                  -> (new Literal(Number(i))),
+  number      :n                                  -> (new Literal(Number(n))),
+  
+  cascade = [:s trans*:a]                         -> [s, a] 
+}//endtrans
+
+// testing parsing method declarations:
+
+declarations = """
+
+!CalculatorParser methodsFor: ''!
+reduceActionForExpression1: nodes 
+	^[(nodes at: 1) + (nodes at: 3)] on: Error do: #return!
+
+reduceActionForLineExpression1: nodes 
+	^(nodes at: 1) isNil 
+		ifTrue: 
+			[Transcript
+				nextPutAll: 'Error';
+				cr]
+		ifFalse: 
+			[Transcript
+				print: (nodes at: 1);
+				cr]!
+
+scanForToken
+	self step.
+	currentCharacter isDigit ifTrue: [^self scan1].
+	(currentCharacter == Character tab 
+		or: [currentCharacter == Character space]) 
+			ifTrue: [^self recordAndReportMatch: #whitespace].
+	currentCharacter == Character lf 
+		ifTrue: [^self recordAndReportMatch: #(10)].
+	currentCharacter == Character cr 
+		ifTrue: 
+			[self recordMatch: #(10).
+			self step.
+			(currentCharacter == Character lf or: [currentCharacter == Character cr]) 
+				ifTrue: [^self recordAndReportMatch: #(10)].
+			^self reportLastMatch].
+	currentCharacter == $!! ifTrue: [^self recordAndReportMatch: #(6)].
+	currentCharacter == $( ifTrue: [^self recordAndReportMatch: #(7)].
+	currentCharacter == $) ifTrue: [^self recordAndReportMatch: #(8)].
+	currentCharacter == $* ifTrue: [^self recordAndReportMatch: #(3)].
+	currentCharacter == $+ ifTrue: [^self recordAndReportMatch: #(1)].
+	currentCharacter == $- 
+		ifTrue: 
+			[self recordMatch: #(2).
+			self step.
+			currentCharacter isDigit ifTrue: [^self scan1].
+			^self reportLastMatch].
+	currentCharacter == $/ ifTrue: [^self recordAndReportMatch: #(4)].
+	currentCharacter == $^ ifTrue: [^self recordAndReportMatch: #(5)].
+	^self reportLastMatch
+! !
+
+"""
+STParser.matchAll(declarations, "transcript")
+
+// testing parsing expressions
+
+transcript = """
+"************************************************************************
+ * testing code, taken from:                                            *
+ *   http://www.angelfire.com/tx4/cus/notes/smalltalk.html              *
+ ************************************************************************"
+| x y z b |
+x _ 4.                                                      "assignment (Squeak) <-"
+x := 5.                                                     "assignment"
+x := y := z := 6.                                           "compound assignment"
+x := (y := 6) + 1.
+b := true.                                                  "true constant"
+b := false.                                                 "false constant"
+x := nil.                                                   "nil object constant"
+x := 1.                                                     "integer constants"
+x := 3.14.                                                  "float constants"
+x := 2e-2.                                                  "fractional constants"
+x := 16r0F.                                                 "hex constant"
+x := -1.                                                    "negative constants"
+x := 'Hello'.                                               "string constant"
+x := 'I''m here'.                                           "single quote escape"
+x := $A.                                                    "character constant"
+x := $ .                                                    "character constant (space)"
+x := #aSymbol.                                              "symbol constants"
+x := #(3 2 1).                                              "array constants"
+x := #('abc' 2 $a).                                         "mixing of types allowed"
+b := (x < 5) or: [y > 1].                                   "boolean or (short-circuit)"
+b := (x < 5) eqv: (y > 1).                                  "test if both true or both false"
+x := 16rFF bitAnd: 16r0F.                                   "and bits"
+x := 16rF0 bitOr: 16r0F.                                    "or bits"
+x := 16rFF bitXor: 16r0F.                                   "xor bits"
+x := 16rFF bitInvert.                                       "invert bits"
+x := 16r0F bitShift: 4.                                     "left shift"
+x := 16rF0 bitShift: -4.                                    "right shift"
+"x := 16r80 bitAt: 7."                                      "bit at position (0|1) [!Squeak]"
+x := 16r80 highbit.                                         "position of highest bit set"
+b := 16rFF allMask: 16r0F.                                  "test if all bits set in mask set in receiver"
+b := 16rFF anyMask: 16r0F.                                  "test if any bits set in mask set in receiver"
+b := 16rFF noMask: 16r0F.                                   "test if all bits set in mask clear in receiver"
+x := [ y := 1. z := 2. ]. x value.                          "simple block usage"
+x := [ :argOne :argTwo |   argOne, ' and ' , argTwo.].      "set up block with argument passing"
+Transcript show: (x value: 'First' value: 'Second'); cr.    "use block with argument passing"
+x := [ | z | z := 1.].                                      "localvars not available in squeak blocks"
+Transcript                                                  "nested if then else Parse error ->"
+   show:
+      (x > 10
+         ifTrue: [x > 5
+            ifTrue: ['A']
+            ifFalse: ['B']]
+         ifFalse: ['C']);
+   cr.
+[x > 0] whileTrue: [x := x - 1. y := y * 2].                "while true loop"
+b := x conform: [:a | (a >= $a) & (a <= $z)].               "test if all elements meet condition"
+y := x select: [:a | a > $a].                               "return all elements that meet condition"
+x := #myVar->'hello'.
+x add: #a->4; add: #b->3; add: #c->1; add: #d->2; yourself. "add element to collection"
+x at: #e put: 3.                                            "set element at index"
+y := x at: #a ifAbsent: [].                                 "retrieve element at index"
+y := x keyAtValue: 3 ifAbsent: [].                          "retrieve key for given value with error block"
+x do: [:a | Transcript show: a printString; cr].            "iterate over the values collection"
+b := x conform: [:a | (a >= 1) & (a <= 4)].                 "test if all elements meet condition"
+CMRDictionary keysAndValuesDo: [:aKey :aValue |             "print out keys and values"
+   Transcript
+      show: aKey printString;
+      space;
+      show: aValue printString;
+      cr].
+a := 'A1'. b := 'B2'. a become: b.                          "switch two objects"
+
+"""
+STParser.matchAll(transcript, "transcript")
+
+t = """
+Object subclass: #Integer!
+
+!Integer methodsFor: 'rar'!
++ n <primitive: 1>! !
+"""
+tree = STParser.matchAll(t, "transcript")
+
+ArrayConst = function() {}
+Assignment = function() {}
+Binding = function() {}
+Block = function() {}
+CascadingSend = function() {}
+Character = function() {}
+Context = function() {}
+Expression = function() {}
+Literal = function() {}
+Method = function() {}
+Return = function() {}
+ReturnSignal = function() {}
+Send = function() {}
+ST = function() {}
+STArray = function() {}
+STClass = function() {}
+Symbol = function() {}
+Variable = function() {}
+
+obj = STTranslator.match(tree, "trans")
+
+// for creating an AS3 impl of the parser...
+
+ometa OMetaParser <: Parser {
+  fromTo :x :y   = seq(x) (~seq(y) char)* seq(y),
+  space          = super(#space) | fromTo('//', '\n') | fromTo('/*', '*/'),
+  nameFirst      = '_' | '$' | letter,
+  nameRest       = nameFirst | digit,
+  tsName         = firstAndRest(#nameFirst, #nameRest):xs              -> xs.join(''),
+  name           = spaces tsName,
+  eChar          = '\\' char:c                                         -> unescape('\\' +c)
+                 | char,
+  tsString       = '\'' (~'\'' eChar)*:xs '\''                         -> xs.join(''),
+  characters     = '`' '`' (~('\'' '\'') eChar)*:xs '\'' '\''          -> [`App, `seq,     xs.join('').toProgramString()],
+  sCharacters    = '"'     (~'"'         eChar)*:xs '"'                -> [`App, `token,   xs.join('').toProgramString()],
+  string         = (('#' | '`') tsName | tsString):xs                  -> [`App, `exactly, xs.toProgramString()],
+  number         = ('-' | empty -> ''):sign digit+:ds                  -> [`App, `exactly, sign + ds.join('')],
+  keyword :xs    = token(xs) ~letterOrDigit                            -> xs,
+  hostExpr       = foreign(BSJSParser, `expr):r                           foreign(BSJSTranslator, `trans, r),
+  atomicHostExpr = foreign(BSJSParser, `semAction):r                      foreign(BSJSTranslator, `trans, r),
+  args           = '(' listOf(`hostExpr, ','):xs ")"                   -> xs
+                 | empty                                               -> [],
+  application    = name:rule args:as                                   -> [`App, rule].concat(as),
+  semAction      = ("!" | "->") atomicHostExpr:x                       -> [`Act,  x],
+  semPred        = "?"          atomicHostExpr:x                       -> [`Pred, x],
+  expr           = listOf(#expr4, '|'):xs                              -> [`Or].concat(xs),
+  expr4          = expr3*:xs                                           -> [`And].concat(xs),
+  optIter :x     = "*"                                                 -> [`Many,  x]
+                 | "+"                                                 -> [`Many1, x]
+                 | empty                                               -> x,
+  expr3          = expr2:x optIter(x):x ( ':' name:n                   -> { self.locals.push(n); [`Set, n, x] }
+                                        | empty                        -> x
+                                        )
+                 | ":" name:n                                          -> { self.locals.push(n); [`Set, n, [`App, `anything]] },
+  expr2          = "~" expr2:x                                         -> [`Not,       x]
+                 | "&" expr1:x                                         -> [`Lookahead, x]
+                 | expr1,
+  expr1          = application | semAction | semPred
+                 | ( keyword('undefined') | keyword('nil')
+                   | keyword('true')      | keyword('false') ):x       -> [`App, #exactly, x]
+                 | spaces (characters | sCharacters | string | number)
+                 | "[" expr:x "]"                                      -> [`Form, x]
+                 | "(" expr:x ")"                                      -> x,
+  ruleName       = name
+                 | spaces tsString,
+  rule           = &(ruleName:n) !(self.locals = ['self=this'])
+                     rulePart(n):x ("," rulePart(n))*:xs               -> [`Rule, n, self.locals, [`Or, x].concat(xs)],
+  rulePart :rn   = ruleName:n ?(n == rn) expr4:b1 ( "=" expr:b2        -> [`And, b1, b2]
+                                                  | empty              -> b1
+                                                  ),
+  grammar        = keyword('ometa') name:n
+                     ( "<:" name | empty -> 'OMeta' ):sn
+                     "{" listOf(#rule, ','):rs "}"                     -> [`Grammar, n, sn].concat(rs)
+}
+
+// By dispatching on the head of a list, the following idiom allows translators to avoid doing a linear search.
+// (Note that the "=" in a rule definition is optional, which can be used to get an ML "feel".)
+ometa OMetaTranslator {
+  trans [:t apply(t):ans]             -> ans,
+  App  'super' anything+:args         -> [self.sName, '._superApplyWithArgs(self,', args.join(','), ')'].join(''),
+  App  :rule   anything+:args         -> ['self._applyWithArgs("', rule, '",',      args.join(','), ')'].join(''),
+  App  :rule                          -> ['self._apply("', rule, '")']                                  .join(''),
+  Act  :expr                          -> expr,
+  Pred :expr                          -> ['self._pred(', expr, ')']                                     .join(''),
+  Or   transFn*:xs                    -> ['self._or(', xs.join(','), ')']                               .join(''),
+  And  notLast(#trans)*:xs trans:y    -> { xs.push('return ' + y)
+                                           ['(function(){', xs.join(';'), '})()'].join('') },
+  And                                 -> '(function(){})',
+  Many  trans:x                       -> ['self._many(function(){return ', x, '})']                     .join(''),
+  Many1 trans:x                       -> ['self._many1(function(){return ', x, '})']                    .join(''),
+  Set   :n trans:v                    -> [n, '=', v].join(''),
+  Not   trans:x                       -> ['self._not(function(){return ', x, '})']                      .join(''),
+  Lookahead trans:x                   -> ['self._lookahead(function(){return ', x, '})']                .join(''),
+  Form  trans:x                       -> ['self._form(function(){return ', x, '})']                     .join(''),
+  Rule  :name locals:ls trans:body    -> ['  public function ', name, '() {', ls, 'return ', body, '}']         .join(''),
+  Grammar :name :sName
+          !(self.sName = sName)
+          trans*:rules                -> ['public class ', name, ' extends ', sName, ' {\n', rules.join('\n'), '}']      .join(''),
+  locals  = [string+:vs]              -> ['var ', vs.join(','), ';']                                    .join('')
+          | []                        -> '',
+  transFn = trans:x                   -> ['(function(){return ', x, '})']                               .join('')
+}
+
+ometa NullOptimization {
+  setHelped = !(self._didSomething = true),
+  helped    = ?self._didSomething,
+  trans     = [:t ?self.hasProperty(t) apply(t):ans] -> ans
+            | anything,
+  optimize  = trans:x helped     -> x,
+
+  Or        trans*:xs            -> [`Or].concat(xs),
+  And       trans*:xs            -> [`And].concat(xs),
+  Many      trans:x              -> [`Many,      x],
+  Many1     trans:x              -> [`Many1,     x],
+  Set       :n trans:v           -> [`Set,       n, v],
+  Not       trans:x              -> [`Not,       x],
+  Lookahead trans:x              -> [`Lookahead, x],
+  Form      trans:x              -> [`Form,      x],
+  Rule      :name :ls trans:body -> [`Rule,      name, ls, body]
+}
+NullOptimization.initialize = function() { this._didSomething = false }
+
+ometa AndOrOptimization <: NullOptimization {
+  And trans:x end          setHelped -> x,
+  And transInside(#And):xs           -> [`And].concat(xs),
+  Or  trans:x end          setHelped -> x,
+  Or  transInside(#Or):xs            -> [`Or].concat(xs),
+
+  transInside :t = [exactly(t) transInside(t):xs] transInside(t):ys setHelped -> xs.concat(ys)
+                 | trans:x                        transInside(t):xs           -> [x].concat(xs)
+                 |                                                            -> []
+}
+
+ometa OMetaOptimizer {
+  optimizeGrammar = [`Grammar :n :sn optimizeRule*:rs]               -> [`Grammar, n, sn].concat(rs),
+  optimizeRule    = :r (foreign(AndOrOptimization, #optimize, r):r)* -> r
+}
+
+parseAndCompileGrammar = function(g) { 
+  gTree = OMetaParser.matchAll(g, "grammar")
+  gTree = OMetaOptimizer.match(gTree, "optimizeGrammar")
+  return OMetaTranslator.match(gTree, "trans") 
+}
+
+thisFile     = readFile("ST_Parser")
+
+stParserGrammar = thisFile.substring(thisFile.indexOf("//beginparser") + 14, thisFile.indexOf("//endparser"))
+parseAndCompileGrammar(stParserGrammar)
+
+stTranslatorGrammar = thisFile.substring(thisFile.indexOf("//starttrans") + 13, thisFile.indexOf("//endtrans"))
+parseAndCompileGrammar(stTranslatorGrammar)
