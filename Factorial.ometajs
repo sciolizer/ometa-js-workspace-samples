@@ -1,0 +1,7 @@
+ometa Factorial {
+  fact 0 = -> 1,
+  fact :n = fact(n-1):m -> (n * m)
+}
+
+Factorial.match(10, 'fact')
+ 
