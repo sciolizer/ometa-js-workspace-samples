@@ -1,0 +1,54 @@
+//
+// various attempts to figure out how head/tail-recursion might work in OMeta:
+//
+
+ometa List {
+  joinJS anything*:i -> (i.join('; ') + '***JS'),
+
+  join1 end -> '***end',
+  join1 :h join1:t -> (h.toString() + "; " + t),
+
+  join2 :h end     -> (h.toString() + "***end"),
+  join2 :h join2:t -> (h.toString() + "; " + t),
+
+  join3 end        -> "***not end",
+  join3 :h end     -> (h.toString() + "***end"),
+  join3 :h join3:t -> (h.toString() + "; " + t),
+
+  list end         -> [],
+  list :h list:t   -> [h].concat(t),
+
+  list2 list2:h anything:t -> h.concat(t),
+  list2 end        -> [],
+
+  end_marker
+}
+
+// here is a JavaScript reference for join that works :-)
+List.matchAll( [1,2,3], "joinJS" )  1; 2; 3***JS
+List.matchAll( [1], "joinJS" )      1***JS
+List.matchAll( [], "joinJS" )       ***JS
+
+// this one adds '; ' after last element :-(
+List.matchAll( [1,2,3], "join1" )   1; 2; 3; ***end
+List.matchAll( [1], "join1" )       1; ***end
+List.matchAll( [], "join1" )        ***end
+
+// not good either :-(
+List.matchAll( [1,2,3], "join2" )   1; 2; 3***end
+List.matchAll( [], "join2" )        (match fails)
+
+// here is n OMeta join that works :-)
+List.matchAll( [1,2,3], "join3" )   1; 2; 3***end
+List.matchAll( [1], "join3" )       1***end
+List.matchAll( [], "join3" )        ***not end
+
+// an OMeta list w. head and tail that works:
+List.matchAll( [1,2,3], "list" )    [1, 2, 3]
+List.matchAll( [1], "list" )        [1]
+List.matchAll( [], "list" )         []
+
+// trying a left-recursive implementation - did not work :-(
+List.matchAll( [1,2,3], "list2" )    (match fails)
+List.matchAll( [1], "list2" )        (match fails)
+List.matchAll( [], "list2" )        []
