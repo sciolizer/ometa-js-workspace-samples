@@ -1,0 +1,33 @@
+// Returns roman numeral representation for a given integer
+// Works up to 399
+// To Run: Select the full text box and press "print it"
+
+ometa Calc {
+  expr       = '(' pexpr:p ')'         -> p,
+  pexpr      = number:m ?(m == 0)      -> ''
+             | majorminor:n            -> n[1].concat(Calc.matchAll((n[2]-n[0]).toString(),'pexpr')),
+  majorminor = majorminormap(
+                   {'C' :[100, 'C'],
+                    'L' :[50, 'L'],
+                    'X':[10, 'X'],
+                    'V':[5,  'V'],
+                    'I':[1,  'I'],
+                    'emp':[0, '']}):r -> r,
+
+  majorminormap :mp = romanchar(mp['C'], mp['X']):r -> r
+                    | romanchar(mp['L'], mp['X']):r -> r
+                    | romanchar(mp['X'], mp['I']):r -> r
+                    | romanchar(mp['V'], mp['I']):r -> r
+                    | romanchar(mp['I'], mp['emp']):r  -> r,
+
+  romanchar :maj :min = rul(maj[0], maj[1]):r -> r
+                      | rul(maj[0] - min[0], min[1].concat(maj[1])):r -> r ,
+
+  rul :v :c  = number:m ?(m >= v)      -> [v, c, m],
+
+  number     = number:n digit:d        -> (n * 10 + d)
+             | digit,
+  digit      = ^digit:d                -> d.digitValue()
+}
+
+Calc.matchAll('(399)', 'expr')
