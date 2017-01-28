@@ -1,0 +1,223 @@
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// 
+// This project contains OMeta definitions for classes that are hosted by C#/.NET
+// and generate C# code. These are saved in a workspace project to assist with
+// bootstrapping; they can be processed by the classes in OMeta_To_CSharp to produce
+// the code for the second stage in a bootstrap process to get a version of OMeta
+// implemented in C# that produces parsers in C#. Note that the host expressions
+// (rule arguments, semantic predicates, and semantic actions) in this file are in C#.
+// You won't be able to compile them directly in the workspace!
+//
+// Status: See project OMeta_To_CSharp
+//
+// Author: Dan Muller (pikdj2002@sneakemail.com)
+
+// With some difficulty, you can arrange to compile the grammars here.
+// Sometimes, this gives you a useful indication of where a parse error
+// is. But not always. Probably need to replace the "do it" and/or "print it"
+// functions in the workspace to make this work right.
+
+// BEGIN: DO THIS ONLY ONCE!
+OrigOMetaParser = BSOMetaParser
+OrigOMetaTranslator = BSOMetaTranslator
+// END
+
+parseGrammar = function(g) { return OrigOMetaParser.matchAll(g, "grammar") }
+optimizeGrammar = function(g) { return BSOMetaOptimizer.match(parseGrammar(g),"optimizeGrammar") }
+compileGrammar = function (g) {return OrigOMetaTranslator.match(optimizeGrammar(g), "trans") }
+
+getGrammar = function ()
+{
+  var s = readFile("OMeta_To_CSharp");
+  var g = arguments[0];
+  var re = new RegExp("\nometa " + g);
+  var i = s.search(re);
+  var s = s.substr(i);
+  i = s.search(new RegExp("\n}"));
+  return s.substr(0, i+3);
+}
+
+compileCrossGrammar = function() {
+  eval(compileGrammar(getGrammar(arguments[0])));
+}
+compileCrossGrammar("CSharpishCodeJsToCSharp")
+compileCrossGrammar("OMetaParserJsToCSharp")
+compileCrossGrammar("OMetaTranslatorJsToCSharp")
+
+BSOMetaParser = OMetaParserJsToCSharp
+BSOMetaTranslator = OMetaTranslatorJsToCSharp
+
+//--------------------------------------------------------------------------------
+//
+// A minimal recognizer for delimited C# expressions, suitable for picking
+// out the semantic actions, predicates, and rule arguments of C# as a host
+// language. We only need to correctly count delimiters.
+//
+// TODO: The code generation step might benefit from converting blocks into lists
+// of statements. Consider the issues of open-coding And expressions.
+//
+
+ometa CSharpishCode {
+
+  // "Rules" to factor out some messy host expressions that operate on sequences.
+  concat :xs         -> {return SequenceTools.Concat((IEnumerable)xs);},
+  join :xs char:s    -> {return SequenceTools.Join((IEnumerable)xs, (char)s);},
+  join :xs string:s  -> {return SequenceTools.Join((IEnumerable)xs, (string)s);},
+
+  code = (parenExpr | block | sqChar | dqString | exactString | comment | chunk)+:xs concat{xs},
+
+  // Blocks are any valid constructs inside of braces. They might
+  // be blocks of statements, or initialization blocks.
+  block        = '{' code*:xs '}' concat{xs}:x   -> { return string.Concat('{', x, '}'); },
+
+  // Parenthesized expressions are any valid constructs inside of
+  // parentheses.
+  parenExpr    = '(' code*:xs ')' concat{xs}:x   -> { return string.Concat('(', x, ')'); },
+
+  // Chunks are arbitrary non-empty sequences of code, but never contain delimiters for
+  // any quoted construct.
+  chunk = (~('\"' | '{' | '}' | '(' | ')' | seq{"/*"} | seq{"//"} | seq{"@\""} | '\'') char)+:xs concat{xs},
+
+  eChar = '\\' char:c                                        -> { return string.Concat('\\', c); }
+        | char,
+  sqChar = '\'' eChar:x '\''                                 -> { return string.Concat('\'', x, '\''); },
+  dqString = '\"' (~'\"' eChar)*:xs '\"' concat{xs}:x        -> { return string.Concat('\"', x, '\"'); },
+  // The exact string is peculiar to C#, AFAIK. @"..." with no escapes recognized.
+  exactString = '@' '\"' (~'\"' char)*:xs '\"' concat{xs}:x  ->  { return string.Concat("@\"", x, '\"'); },
+  // C-family comments:
+  comment = fromTo{"//", "\n"} | fromTo{"/*", "*/"},
+  fromTo :x :y   = seq{x}:a (~seq{y} char)*:bs seq{y}:c concat{bs}:b -> { return string.Concat(a, b, c); }
+}
+
+//--------------------------------------------------------------------------------
+
+ometa Parser {
+   token :x = spaces seq{x},
+   listOf :rule :s = apply{rule}:x (token{s} apply{rule})*:ys -> { var lst = new ArrayList{ x };
+                                                                     lst.AddRange((ICollection)ys);
+                                                                     return lst;}
+}
+
+//--------------------------------------------------------------------------------
+
+ometa OMetaParser <: Parser {
+  // "Rules" to factor out some messy host expressions that operate on sequences.
+  concat :xs         -> {return SequenceTools.Concat((IEnumerable)xs);},
+  join :xs char:s    -> {return SequenceTools.Join((IEnumerable)xs, (char)s);},
+  join :xs string:s  -> {return SequenceTools.Join((IEnumerable)xs, (string)s);},
+
+  fromTo :x :y   = seq{x} (~seq{y} char)* seq{y},
+  space          = super{"space"} | fromTo{"//", "\n"} | fromTo{"/*", "*/"},
+  nameFirst      = '_' | '$' | letter,
+  nameRest       = nameFirst | digit,
+  tsName         = firstAndRest{"nameFirst", "nameRest"}:xs concat{xs},
+  name           = spaces tsName,
+  eChar          = '\\' char:c                                         -> {return "\\" + (char)c;}
+                 | char,
+  tsString       = '\'' (~'\'' eChar)*:xs '\'' concat{xs},
+  characters     = '`' '`' (~('\'' '\'') eChar)*:xs '\'' '\'' concat{xs}:x
+                                                                       -> {return new ArrayList {"App", "\"seq\"",
+                                                                                          SequenceTools.QuotedString(x)};},
+  sCharacters    = '"'     (~'"'         eChar)*:xs '"' concat{xs}:x   -> {return new ArrayList {"App", "\"token\"",
+                                                                                          SequenceTools.QuotedString(x)};},
+  string         = (('#' | '`') tsName | tsString):x                   -> {return new ArrayList {"App", "\"exactly\"",
+                                                                                          SequenceTools.QuotedString(x)};},
+  number         = ('-' | empty -> {return "";}):sign digit+:ds concat{ds}:n   -> {return new ArrayList {"App", "\"exactly\"",
+                                                                                          string.Concat(sign, n)};},
+  keyword :xs    = token{xs} ~letterOrDigit                            -> {return xs;},
+  hostCode       = foreign{new CSharpishCode(), "code"},
+  args           = "{" listOf{"hostCode", ','}:xs "}"                  -> {return xs;}
+                 | empty                                               -> {return new ArrayList();},
+  application    = name:rule args:xs                                   -> {var r = new ArrayList
+                                                                               {"App", SequenceTools.QuotedString(rule)};
+                                                                           r.AddRange((ICollection)xs);
+                                                                           return r;},
+  semAction      = ("!" | "->") "{" hostCode:x "}"                     -> {return new ArrayList {"Act",  x};},
+  semPred        = "?"          "{" hostCode:x "}"                     -> {return new ArrayList {"Pred", x};},
+  expr           = listOf{"expr4", '|'}:xs                             -> {var r = new ArrayList {"Or"};
+                                                                           r.AddRange((ICollection)xs);
+                                                                           return r;},
+  expr4          = expr3*:xs                                           -> {var r = new ArrayList {"And"};
+                                                                           r.AddRange((ICollection)xs);
+                                                                           return r;},
+  optIter :x     = "*"                                                 -> {return new ArrayList {"Many",  x};}
+                 | "+"                                                 -> {return new ArrayList {"Many1", x};}
+                 | empty                                               -> {return x;},
+  expr3          = expr2:x optIter{x}:x ( ':' name:n                   -> { ((IList)this["locals"]).Add(n);
+                                                                            return new ArrayList {"Set", n, x}; }
+                                        | empty                        -> {return x;}
+                                        )
+                 | ":" name:n                                          -> { ((IList)this["locals"]).Add(n);
+                                                                             return new ArrayList {"Set", n,
+                                                                                new ArrayList {"App", "\"anything\""}}; },
+  expr2          = "~" expr2:x                                         -> {return new ArrayList {"Not", x};}
+                 | "&" expr1:x                                         -> {return new ArrayList {"Lookahead", x};}
+                 | expr1,
+  expr1          = application | semAction | semPred
+                 | ( keyword{"undefined"} | keyword{"nil"}
+                   | keyword{"true"}      | keyword{"false"} ):x       -> {return new ArrayList {"App", "\"exactly\"", x};}
+                 | spaces (characters | sCharacters | string | number)
+                 | "[" expr:x "]"                                      -> {return new ArrayList {"Form", x};}
+                 | "(" expr:x ")"                                      -> {return x;},
+  ruleName       = name
+                 | spaces tsString,
+  rule           = &(ruleName:n) !{this["locals"] = new ArrayList(); return true;}
+                     rulePart{n}:x ("," rulePart{n})*:xs               -> {var r = new ArrayList {"Or", x};
+                                                                           r.AddRange((ICollection)xs);
+                                                                           return new ArrayList {"Rule", n, this["locals"], r};},
+  rulePart :rn   = ruleName:n ?{return Equals(n,rn);} expr4:b1 ( "=" expr:b2 -> {return new ArrayList {"And", b1, b2 };}
+                                                  | empty              -> {return b1;}
+                                                  ),
+  grammar        = keyword{"ometa"} name:n
+                     ( "<:" name | empty -> {return "OMeta";} ):sn
+                     "{" listOf{"rule", ','}:rs "}"                    -> {var r = new ArrayList {"Grammar", n, sn};
+                                                                           r.AddRange((ICollection)rs);
+                                                                           return r;}
+}
+
+//--------------------------------------------------------------------------------
+
+ometa OMetaTranslator {
+  // "Rules" to factor out some messy host expressions that operate on sequences.
+  concat :xs         -> {return SequenceTools.Concat((IEnumerable)xs);},
+  join :xs char:s    -> {return SequenceTools.Join((IEnumerable)xs, (char)s);},
+  join :xs string:s  -> {return SequenceTools.Join((IEnumerable)xs, (string)s);},
+
+  trans [:t apply{t}:ans]             -> {return ans;},
+  transFn = trans:x asFnArg{x},
+  asFnArg = string:x       -> {return string.Concat("delegate {", x, "}");},
+
+  App  '\"super\"' :rule anything+:args join{args,", "}:a -> {return string.Concat("return base.App(", rule, ", ", a, ");");},
+  App  '\"super\"' :rule                        -> {return string.Concat("return base.App(", rule, ");");},
+  App  :rule   anything+:args join{args,", "}:a -> {return string.Concat("return App(", rule, ",", a, ");");},
+  App  :rule                                    -> {return string.Concat("return App(", rule, ");");},
+  Act  :expr                          -> {return expr;},
+  Pred :expr                          -> {return string.Concat("return Pred( delegate\n{\n", expr, "\n});");},
+  Or   transFn*:xs join{xs,",\n"}:x   -> {return string.Concat("return Or(", x, ");");},
+  And  transFn*:xs join{xs,",\n"}:x   -> {return string.Concat("return And(", x, ");");},
+  Many  transFn:x                     -> {return string.Concat("return Many(", x, ");");},
+  Many1 transFn:x                     -> {return string.Concat("return Many1(", x, ");");},
+  Set   :n transFn:v                  -> {return string.Concat("return Set( ref ", n, ", ", v, ");");},
+  Not   transFn:x                     -> {return string.Concat("return Not(", x, ");");},
+  Lookahead transFn:x                 -> {return string.Concat("return Lookahead(", x, ");");},
+  Form  transFn:x                     -> {return string.Concat("return Form(", x, ");");},
+  Rule  :name locals:ls trans:body    -> {return new RuleDefinition((string)name, (IEnumerable)ls, (string)body);},
+  // TODO: Figure out how to specify a namespace.
+  Grammar :name :sName
+          !{this["sName"] = sName; return true;}
+          // MakeParserSource and the RuleDefinition type are provided by ParserBase.
+          trans*:rules namespace:ns   -> {return MakeParserSource((string)ns, (string)name, (string)sName, (IEnumerable)rules);},
+  locals  = []                        -> {return new ArrayList();}
+          | [apply{"unique"}],
+
+  // Unique transforms the input stream into a list from which duplicates have been removed.
+  unique  = string:x ~any{x} unique:rest -> {var r = new ArrayList {x}; r.AddRange((ICollection)rest); return r;}
+          | string:x unique
+          | empty -> {return new ArrayList();},
+
+  // any{x} matches if the input stream contains any object that exactly matches x
+  any :x  = exactly{x} | anything any{x},
+
+  // This rule can be overridden to change the namespace:
+  namespace = empty -> {return "OMetaCompiler";}
+}
