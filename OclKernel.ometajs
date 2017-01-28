@@ -1,0 +1,78 @@
+
+ometa OclParser {
+  symbol   = spaces <letter (letter | digit)*>,
+  digit    = ^digit:d                 -> d.digitValue(),
+  number   = number:n digit:d         -> (n * 10 + d)
+           | digit,
+  oclBlock = "ocl {" expr:e "}"       -> e,
+  array    = symbol,
+  addExpr  = addExpr:x '+' mulExpr:y  -> ['add', x, y]
+           | addExpr:x '-' mulExpr:y  -> ['sub', x, y]
+           | mulExpr,
+  mulExpr  = mulExpr:x '*' primExpr:y -> ['mul', x, y]
+           | mulExpr:x '/' primExpr:y -> ['div', x, y]
+           | primExpr,
+  primExpr = '(' expr:x ')'           -> x
+           | number:n                 -> ['num', n]
+           | array:a "[" number:b ":" number:e "]" -> ['ran', a, b, e]
+           | array:a "[" number:n "]" -> ['elt', a, n]
+           | array:a                  -> ['arr', a],
+  expr     = addExpr
+}
+
+//tree = OclParser.matchAll('ocl {in1[1]+in2*(2/in3[5:7])}', 'oclBlock' )
+tree = OclParser.matchAll('ocl {in1[1]+in2*(2*in2/in3[5:7])}', 'oclBlock')
+
+in1 = [45, 89]
+
+getValue = function(a,n) {
+  return eval(a + "[" + n + "]");
+}
+arrNames = {}
+arrNamesId = 0
+getNewArrName = function(arr) {
+  var a = arr.toString();
+  if (arrNames[a] == undefined) {
+    arrNames[a] = 'arr' + arrNamesId++;
+  }
+  return arrNames[a];
+}
+getIdxName = function(arr) {
+  return getNewArrName(arr) + '_idx';
+}
+
+ometa KernelComputeLineCompiler  {
+  comp [anything:t apply(t):ans] -> ans,
+  num  anything:x                -> x.toString(),
+  arr  anything:x                -> (getNewArrName(x) + '[' + getNewArrName(x) + '_idx]'),
+  ran  anything:x anything:b anything:e -> (getNewArrName(x) + '[' + b.toString() + '+' + getIdxName(x) + ']'),
+  elt  anything:a anything:n   -> getValue(a, n),
+  add  comp:x comp:y             -> ('(' + x + '+' + y + ')'),
+  sub  comp:x comp:y             -> ('(' + x + '-' + y + ')'),
+  mul  comp:x comp:y             -> ('(' + x + '*' + y + ')'),
+  div  comp:x comp:y             -> ('(' + x + '/' + y + ')')
+}
+code = KernelComputeLineCompiler.match(tree, 'comp')
+
+ometa KernelIndexRangeConditionCompiler  {
+  comp [anything:t apply(t):ans] -> ans,
+  num  anything:x                -> '',
+  arr  anything:x                ->  ( '(' + getIdxName(x) + '< 0 || ' + getIdxName(x) + '>(' + getNewArrName(x) + '_size-1))'),
+  ran  anything:x anything:b anything:e -> ( '(' + getIdxName(x) + '<' + b.toString() + ' || ' + getIdxName(x) + '>' + e.toString() + ')'),
+  elt  anything:a anything:n     -> '',
+  add  comp:x comp:y ?(x=='')    -> (y),
+  add  comp:x comp:y ?(y=='')    -> (x),
+  add  comp:x comp:y             -> (x + '||' +y),
+  sub  comp:x comp:y ?(x=='')    -> (y),
+  sub  comp:x comp:y ?(y=='')    -> (x),
+  sub  comp:x comp:y             -> (x + '||' +y),
+  mul  comp:x comp:y ?(x=='')    -> (y),
+  mul  comp:x comp:y ?(y=='')    -> (x),
+  mul  comp:x comp:y             -> (x + '||' +y),
+  div  comp:x comp:y ?(x=='')    -> (y),
+  div  comp:x comp:y ?(y=='')    -> (x),
+  div  comp:x comp:y             -> (x + '||' +y)
+}
+code = KernelIndexRangeConditionCompiler.match(tree, 'comp')
+
+ (arr0_idx< 0 || arr0_idx>(arr0_size-1))||(arr0_idx< 0 || arr0_idx>(arr0_size-1))||(arr1_idx<5 || arr1_idx>7)
