@@ -1,0 +1,302 @@
+// this is a direct paste of the SL template parser that Hans-Martin Mosner wrote for me in OMeta/squeak. Obviously it doesn't work as-is due to squeak-specific syntax.
+//
+// Currently, OMeta is implemented in C#, JavaScript, Smalltalk, Scheme, Ruby and Common Lisp
+// using the strategy found in libomv, pyogp and Linden Lab's C++ viewer, one could create a generic library of packet handling methods for each language that OMeta is implemented in by simply changing the code on the right hand of the production . 
+// So in theory, one could create unoptimized packet handlers for any VWRAP protocol in any of the above languages.
+//
+// Combine that with rigorous definitions for other aspects of VWRAP, and you could generate an entire VWRAP client (sans graphics) from specifications plus a little coding in the OMeta host language.
+
+
+
+// the first task to make this webpage useful is to convert this code to OMeta/js syntax. The second task is to implement a similar parser for the realextend alternate protocol for virtual worlds:
+
+// this is the code for the low level networking lib used for it, http://bitbucket.org/clb/knet/ .. 
+// the docs for that in http://clb.demon.fi/knet/ . 
+// the code that uses that to do EC sync in Naali/Tundra is https://github.com/realXtend/naali/tree/tundra/TundraLogicModule/ .. 
+// there are the message definitions (as tundra .msg xmls, which are kind of like the protobuf message files) 
+// https://github.com/realXtend/naali/blob/tundra/TundraLogicModule/TundraMessages.xml
+
+
+// very cool project!  -- Jay
+
+
+
+
+//SL protocol parser, still in OMeta/squeak syntax: 
+
+ometa SLParser {
+     ascii :i = exactly(i asCharacter),
+      comment = ``//'' (~nl _)* nl?,
+  compression = "Unencoded" | "Zerocoded",
+           cr = ascii(13),
+          dec = decdigit:d (decdigit:d1 [d*10+d1]:d)*      ->   [d],
+     decdigit = char:c ?[c digitValue between: 0 and: 9]   ->   [c digitValue],
+         file = version message*:m spaces                  ->   [m],
+    frequency = ("Low" | "Medium" | "High" | "Fixed"),
+          hex = "0x" hexdigit:d (hexdigit:d1 [d*16+d1]:d)* ->   [d],
+     hexdigit = char:c ?[c digitValue between: 0 and: 15]  ->   [c digitValue],
+        ident = spaces <letter (letter | digit)*>,
+           lf = ascii(10),
+      message = "{" ident:name frequency:freq number:code trustLevel:trust compression:comp udpDeprecated? messageBlock*:blocks "}"
+                                                           ->   [{name. freq. code. trust. comp. blocks}],
+ messageBlock = "{" ident:name messageBlockFrequency:occ messageVariable*:vars "} 
+                                                           ->   [{name. occ. vars}],
+messageBlockFrequency = "Single" | "Multiple" number:n ['Multiple'->n] | "Variable",
+      messageVariable = "{" ident:name type:type "}"       ->   [{name. type}],
+                   nl = lf | cr lf?,
+               number = spaces(hex | dec),
+               spaces = <(comment | char:c ?[c asInteger <= 32])*>,
+           trustLevel = "Trusted" | "NotTrusted",
+                 type =
+                        "Null"
+                |       "Fixed" number:n ['Fixed'->n]
+                |       "Variable" number:n ['Variable'->n]
+                |       "U8"
+                |       "U16"
+                |       "U32"
+                |       "U64"
+                |       "S8"
+                |       "S16"
+                |       "S32"
+                |       "S64"
+                |       "F32"
+                |       "F64"
+                |       "LLVector3d"
+                |       "LLVector3"
+                |       "LLVector4"
+                |       "LLQuaternion"
+                |       "LLUUID"
+                |       "BOOL"
+                |       "IPADDR"
+                |       "IPPORT"
+                |       "U16Vec3"
+                |       "U16Quat"
+                |       "S16Array",
+      udpDeprecated = "UDPDeprecated",
+            version = "version" "2.0"
+}
+
+
+// Running the code above on the message template file found at: http://lib.openmetaverse.org/template/release/1.19.1.4.txt
+// will give you a Smalltalk Array object of the form:
+// 
+//{'TestMessage' . 'Low' . 1 . 'NotTrusted' . 'Zerocoded' . an OrderedCollection({'TestBlock1' . 'Single' . an OrderedCollection(#('Test1' 'U32'))} {'NeighborBlock' . 'Multiple'->4 . an OrderedCollection(#('Test0' 'U32') #('Test1' 'U32') #('Test2' 'U32'))})}
+//{'PacketAck' . 'Fixed' . 4294967291 . 'NotTrusted' . 'Unencoded' . an OrderedCollection({'Packets' . 'Variable' . an OrderedCollection(#('ID' 'U32'))})}
+//{'OpenCircuit' . 'Fixed' . 4294967292 . 'NotTrusted' . 'Unencoded' . an OrderedCollection({'CircuitInfo' . 'Single' . an OrderedCollection(#('IP' 'IPADDR') #('Port' 'IPPORT'))})}
+//{'CloseCircuit' . 'Fixed' . 4294967293 . 'NotTrusted' . 'Unencoded' . an OrderedCollection()}
+//{'StartPingCheck' . 'High' . 1 . 'NotTrusted' . 'Unencoded' . an OrderedCollection({'PingID' . 'Single' . an OrderedCollection(#('PingID' 'U8') #('OldestUnacked' 'U32'))})}
+// ...
+// which has an entry for every packet type defined in the file. Automatic packet handlers can be "compiled" by OMeta by adding the appropriate code within the "[   ]"   found on the right side of the "->".  You could add compilers for compiled languages simply by outputing the appropriate source code as comments in the host scripting language.
+
+///////////////////////////////////////////////////////////////////////////////////////////
+// nothing below this line has been modded, so it makes no sense with the above parser. I'm just keeping it around for the sake of readily available sample code. For working examples of OMeta/js, see the popdown menus in the upper right corner of this page.
+
+L.matchAll('6*(4+3)', 'expr')
+
+
+
+
+
+
+// a recognizer that also interprets
+
+ometa Calc {
+  digit    = ^digit:d                 -> d.digitValue(),
+  number   = number:n digit:d         -> (n * 10 + d)
+           | digit,
+  addExpr  = addExpr:x '+' mulExpr:y  -> (x + y)
+           | addExpr:x '-' mulExpr:y  -> (x - y)
+           | mulExpr,
+  mulExpr  = mulExpr:x '*' primExpr:y -> (x * y)
+           | mulExpr:x '/' primExpr:y -> (x / y)
+           | primExpr,
+  primExpr = '(' expr:x ')'           -> x
+           | number,
+  expr     = addExpr
+}
+
+Calc.matchAll('6*(4+3)', 'expr')
+
+
+
+
+
+
+// parser and simple interpreter combo
+
+ometa CalcParser {
+  digit    = ^digit:d                 -> d.digitValue(),
+  number   = number:n digit:d         -> (n * 10 + d)
+           | digit,
+  addExpr  = addExpr:x '+' mulExpr:y  -> ['add', x, y]
+           | addExpr:x '-' mulExpr:y  -> ['sub', x, y]
+           | mulExpr,
+  mulExpr  = mulExpr:x '*' primExpr:y -> ['mul', x, y]
+           | mulExpr:x '/' primExpr:y -> ['div', x, y]
+           | primExpr,
+  primExpr = '(' expr:x ')'           -> x
+           | number:n                 -> ['num', n],
+  expr     = addExpr
+}
+
+tree = CalcParser.matchAll('6*(4+3)', 'expr') 
+
+ometa CalcInterpreter {
+  interp = ['num' anything:x]        -> x
+         | ['add' interp:x interp:y] -> (x + y)
+         | ['sub' interp:x interp:y] -> (x - y)
+         | ['mul' interp:x interp:y] -> (x * y)
+         | ['div' interp:x interp:y] -> (x / y)
+}
+
+CalcInterpreter.match(tree, 'interp')
+
+
+
+
+
+
+
+// we can write a "compiler" instead
+
+ometa CalcCompiler {
+  comp    = ['num' anything:x]    -> x.toString()
+          | ['add' comp:x comp:y] -> ('(' + x + '+' + y + ')')
+          | ['sub' comp:x comp:y] -> ('(' + x + '-' + y + ')')
+          | ['mul' comp:x comp:y] -> ('(' + x + '*' + y + ')')
+          | ['div' comp:x comp:y] -> ('(' + x + '/' + y + ')')
+}
+
+code = CalcCompiler.match(tree, 'comp')
+eval(code)
+ 
+
+
+
+
+
+
+
+
+
+
+
+// spice things up with ML-like syntax
+
+ometa CalcCompiler {
+  comp ['num' anything:x]    -> x.toString(),
+  comp ['add' comp:x comp:y] -> ('(' + x + '+' + y + ')'),
+  comp ['sub' comp:x comp:y] -> ('(' + x + '-' + y + ')'),
+  comp ['mul' comp:x comp:y] -> ('(' + x + '*' + y + ')'),
+  comp ['div' comp:x comp:y] -> ('(' + x + '/' + y + ')')
+}
+
+code = CalcCompiler.match(tree, 'comp')
+eval(code)
+ 
+
+
+
+
+
+
+
+
+
+
+
+// a neat trick: dispatch on node tags using higher-order rule "apply"
+
+ometa CalcCompiler {
+  comp [anything:t apply(t):ans] -> ans,
+  num  anything:x                -> x.toString(),
+  add  comp:x comp:y             -> ('(' + x + '+' + y + ')'),
+  sub  comp:x comp:y             -> ('(' + x + '-' + y + ')'),
+  mul  comp:x comp:y             -> ('(' + x + '*' + y + ')'),
+  div  comp:x comp:y             -> ('(' + x + '/' + y + ')')
+}
+
+code = CalcCompiler.match(tree, 'comp')
+eval(code)
+
+
+
+
+
+
+// I have a question.  Why does this print '6' rather than '42'?
+// (I took the definition of "Calc" and split "addExpr" into two pieces.)
+
+ometa CalcQuestion1 {
+  digit    = ^digit:d                 -> d.digitValue(),
+  number   = number:n digit:d         -> (n * 10 + d)
+           | digit,
+
+  addExpr  = addExpr2:x               -> x,
+  addExpr2 = addExpr:x '+' mulExpr:y  -> (x + y)
+           | addExpr:x '-' mulExpr:y  -> (x - y)
+           | mulExpr,
+  mulExpr  = mulExpr:x '*' primExpr:y -> (x * y)
+           | mulExpr:x '/' primExpr:y -> (x / y)
+           | primExpr,
+  primExpr = '(' expr:x ')'           -> x
+           | number,
+  expr     = addExpr
+}
+
+CalcQuestion1.matchAll('6*(4+3)', 'expr')
+
+
+
+
+
+// Here is a similar case.  I would expect to see '42' and not '6'.
+// Am I misunderstanding something?
+// (In this case, I modified "addExpr" to immediately try itself first.)
+
+ometa CalcQuestion2 {
+  digit    = ^digit:d                 -> d.digitValue(),
+  number   = number:n digit:d         -> (n * 10 + d)
+           | digit,
+  addExpr  = addExpr:x '+' mulExpr:y  -> (x + y)
+           | addExpr:x '-' mulExpr:y  -> (x - y)
+           | mulExpr,
+  mulExpr  = mulExpr:x '*' primExpr:y -> (x * y)
+           | mulExpr:x '/' primExpr:y -> (x / y)
+           | primExpr,
+           
+  primExpr = '(' expr:x ')'           -> x
+           | number,
+  expr     = addExpr
+}
+
+CalcQuestion2.matchAll('69*(4+3)', 'expr') 
+ 6
+// StatefulCalculator, RÃ¼diger Plantiko, NOV-10-2010
+// See a working example on separate project #StatefulCalculator
+
+ometa StatefulCalculator <: Parser {
+  var           = letter:x             -> x,
+  num           = num:n digit:d        -> (n*10 + d*1)
+                | digit:d              -> (d*1),
+  primaryExpr   = spaces var:x         -> self.vars[x]
+                | spaces num:n         -> n
+                | "(" expr:r ")"       -> r,
+  mulExpr       = mulExpr:x "*" primaryExpr:y -> ( x * y )
+                | mulExpr:x "/" primaryExpr:y -> ( x / y )
+                | primaryExpr,
+  addExpr       = addExpr:x "+" mulExpr:y     -> ( x + y )
+                | addExpr:x "-" mulExpr:y     -> ( x - y )
+                | mulExpr,
+  expr          = var:x  "=" expr:r           -> (self.vars[x] = r)
+                | addExpr,
+  doit          = (expr:r)* spaces end        -> r                                                        
+
+}
+StatefulCalculator.initialize = function() {  this.vars = {}; }
+
+// Set a variable x to 1, so self.vars.x will be 1
+StatefulCalculator.matchAll( 'x=1', 'doit' );
+
+StatefulCalculator.matchAll( 'x+x', 'doit' );  
+// ^ will print NaN, not 2, as I would expect
