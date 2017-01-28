@@ -1,0 +1,24 @@
+//
+// Trying to perform ML/Haskell-style matching on a list
+//
+
+ometa List {
+
+  exec   [anything:a apply(a):ans] -> ans,
+
+  example_data -> [1,2,3,4,5],
+
+  apply2 anything:prefix anything*:args -> { result = []; for(var arg in args) { result.concat( List.matchAll( arg, prefix ) ) }; result },
+
+  twice :x -> ( 2*x ),
+
+  test example_data:list apply2('twice',list):ans -> ans,
+
+  end_marker
+}
+
+List.matchAll( [['twice', 2]], 'exec' )  4
+
+List.matchAll( [['twice', 4],['twice', 3]], 'exec' )  8
+
+List.matchAll( [['apply2', 'twice', [2,3]]], 'exec' )       []
