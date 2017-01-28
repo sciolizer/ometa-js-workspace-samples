@@ -1,0 +1,11 @@
+ometa Profit {
+  lookup :env :sym ?env.hasProperty(sym) -> env[sym],
+  sales :env = lookup(env,'sales'),
+  costs :env = lookup(env, 'costs'),
+  profit :env = sales(env):s costs(env):c -> (s-c)
+
+}
+
+Profit.matchAll([{ sales: 27, costs: 10}], 'profit')
+
+
