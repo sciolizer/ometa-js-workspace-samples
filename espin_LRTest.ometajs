@@ -1,0 +1,68 @@
+This project is about testing Left Recursion support in OMeta/JS.
+It is inspired by Warth, A. and Douglass, J.R. and Millstein, T.
+"Pacrkat Parsers Can Support Left Recursion"
+
+I have also checked PyMeta implementation and it supports direct LR,
+but not indirect one.
+Reading the code of OMeta/JS direct LR is supported as shown in
+first example.
+
+This is direct left recursion:
+ometa directLR {
+  expr = expr '-' num
+       | num,
+  num  = digit
+}
+
+input = '1-2-3'
+directLR.matchAll(input, 'expr')
+
+
+Here is an indirect Left Recursion which is not supported:
+ometa indirectLR {
+  expr = xxx:a '-' num:b end -> [a,'-',b]
+       | num end,
+  num  = digit,
+  xxx  = expr
+}
+
+indirectLR.matchAll(input, 'expr')
+
+
+ometa lr {
+  lr = lr '1' | '1'
+}
+
+input = '11111'
+lr.matchAll(input, 'lr')
+
+
+ometa rr {
+  rr = '1' rr | '1'
+}
+
+input = '11111'
+rr.matchAll(input, 'rr')
+
+
+
+ometa lr1 {
+  lr1 = x1 '1' | '1',
+  x1 = lr1
+}
+
+input = '11111'
+lr1.matchAll(input, 'lr1')
+
+
+
+ometa lr2 {
+  lr2 = x2 '1' | '1',
+  x2 = x1,
+  x1 = lr2
+}
+
+input = '11111'
+lr2.matchAll(input, 'lr2')
+
+
